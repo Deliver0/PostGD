@@ -1,0 +1,9 @@
+torch>=2.0
+torchvision>=0.15
+transformers>=4.35
+timm>=0.9
+numpy>=1.24
+Pillow>=9.5
+tqdm>=4.65
+safetensors>=0.3
+

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "reference_dir": "/path/to/training_reference_images",
+  "reference_images": 0,
+  "resize_for_estimation": 256,
+  "mask_rule": "max_rgb>20 and chroma_range>8",
+  "lab_mean": [128.0, 128.0, 128.0],
+  "lab_std": [32.0, 8.0, 8.0]
+}
+
