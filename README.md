@@ -43,13 +43,39 @@ background image or diffusion-generated background
 ## Repository layout
 
 ```text
-stage1/
-  full_method/       Complete background -> calibration -> rendering pipeline
-  render_only/       Standalone renderer for an existing fundus background
-distillation/         DINOv3 teacher–student distillation
-downstream/            Dataset-agnostic few-shot head adaptation
-configs/               Public configuration templates
-docs/                  Reproducibility and implementation notes
+PostGD/
+├── README.md                         Project overview and reproduction entry points
+├── LICENSE                           MIT license for the released method code
+├── CITATION.bib                      Citation information
+├── configs/
+│   └── hospital_lab_template.json    Public Lab-profile template
+├── stage1/                            Synthetic image generation
+│   ├── full_method/                  Complete background-to-image pipeline
+│   │   ├── generate.py               Background, calibration, rendering, and export
+│   │   ├── fit_lab_profile.py        Fit a profile from training images
+│   │   ├── requirements.txt
+│   │   └── src/
+│   │       ├── color_calibration.py
+│   │       ├── prior_guidance.py
+│   │       └── spot_renderer.py
+│   └── render_only/                  Renderer for an existing fundus background
+│       ├── render_spots.py           Command-line entry point
+│       ├── requirements.txt
+│       ├── src/
+│       │   ├── prior_guidance.py
+│       │   └── spot_renderer.py
+│       └── tests/
+│           └── test_renderer.py
+├── distillation/                     Teacher–student representation learning
+│   ├── distill.py
+│   └── requirements.txt
+├── downstream/                       Few-shot downstream head adaptation
+│   ├── adapt_head.py
+│   └── README.md
+└── docs/                             Reproducibility and implementation notes
+    ├── IMPLEMENTATION.md
+    ├── REPRODUCIBILITY.md
+    └── THIRD_PARTY.md
 ```
 
 ## Installation
