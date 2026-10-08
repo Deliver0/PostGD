@@ -152,7 +152,9 @@ The fovea/optic-disc checkpoint is obtained from
 [Fundus Image Toolbox / Zenodo 11174642](https://zenodo.org/records/11174642)
 and should be extracted under `models/fovea_od/`. Its checkpoint license is not
 declared in the Zenodo record, so do not redistribute it without author
-clarification.
+clarification. If the Zenodo HTML page temporarily returns `504`, use the
+[record API](https://zenodo.org/api/records/11174642) or the direct archive link
+in [`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md).
 
 ### DINOv3 initialization and PostGD student
 

@@ -7,7 +7,7 @@ experiment contract.
 ## Before stage 1
 
 - [ ] Install `stage1/full_method/requirements.txt`.
-- [ ] Download the [ReSDv1.4 fine-tuned UNet](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip)
+- [ ] Download the [ReSDv1.4 fine-tuned UNet](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content)
       and extract it so `models/sd-retina-model/checkpoint-60000/unet/` exists.
       The base `CompVis/stable-diffusion-v1-4` components are loaded from the
       Hugging Face cache (or downloaded with the explicit `--allow-download`

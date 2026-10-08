@@ -48,7 +48,7 @@ Download and extract the fine-tuned UNet:
 
 ```bash
 curl -L --fail \
-  https://zenodo.org/api/records/10947092/files/sd-retina-model.zip \
+  https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content \
   -o /tmp/sd-retina-model.zip
 unzip -q /tmp/sd-retina-model.zip -d "$POSTGD_WEIGHTS"
 test -f "$POSTGD_WEIGHTS/sd-retina-model/checkpoint-60000/unet/config.json"
@@ -121,7 +121,10 @@ not substitutes for the formal `wnet_drive` file.
 ## 4. Fovea and optic-disc localization
 
 The upstream Fundus Image Toolbox downloads its fovea/optic-disc weights from
-[Zenodo record 11174642](https://zenodo.org/records/11174642). The checkpoint
+[Zenodo record 11174642](https://zenodo.org/records/11174642). If the human
+record page returns a temporary `504 Gateway Time-out`, the same record is
+available as [Zenodo API metadata](https://zenodo.org/api/records/11174642), and
+the direct file endpoint below does not require the HTML page. The checkpoint
 used by the formal run was:
 
 ```text
