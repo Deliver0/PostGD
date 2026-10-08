@@ -107,18 +107,23 @@ pip install -r distillation/requirements.txt
 
 ## Pretrained models
 
-No checkpoint is bundled with this repository. The formal experiments used:
+No model checkpoint is bundled with or hosted by this repository. The links below
+point to upstream sources; access, download, and use remain subject to each
+source's terms.
 
-| Component | Expected input | How to provide it |
+| Component | Upstream source | Availability and use |
 |---|---|---|
-| Stable Diffusion base components | 512px background generation | local Hugging Face cache or `--base-model` |
-| Fine-tuned background UNet | SD-compatible UNet | `--weight-dir` |
-| DINOv3 teacher/student | `vit_base_patch16_dinov3` | `--teacher-weights` and `--student-weights` |
-| Vessel prior | W-Net-compatible checkpoint | `--vessel-model` or `POSTGD_VESSEL_MODEL` |
-| Fovea/optic-disc prior | local toolbox checkpoint directory | `--fovea-model-dir` or `POSTGD_FOVEA_MODEL_DIR` |
+| Stable Diffusion v1.4 base components | [Hugging Face model](https://huggingface.co/CompVis/stable-diffusion-v1-4) | Use is subject to [CreativeML Open RAIL-M](https://github.com/CompVis/stable-diffusion/blob/main/LICENSE). The generator downloads only when `--allow-download` is set. |
+| Retina fine-tuned background UNet | [Zenodo record 10947092](https://zenodo.org/records/10947092), file [`sd-retina-model.zip`](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content) | The Zenodo record declares CC-BY-4.0. The checkpoint is based on Stable Diffusion, so the base model's Open RAIL-M restrictions also apply. Extract it locally; `--weight-dir` must point to the directory containing `checkpoint-60000/unet/`. |
+| DINOv3 ViT-B/16 initialization | [Meta access page](https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/), [official Hugging Face collection](https://huggingface.co/collections/facebook/dinov3-68924841bd6b561778e31009), [official repository](https://github.com/facebookresearch/dinov3) | Gated: request access and accept Meta's [DINOv3 license](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md). The repository does not mirror these weights. |
+| PostGD distilled student | No public download | `student_final.pth` is a PostGD training output and is not currently published. Reproduce it with Stage 2 after obtaining permitted DINOv3 initialization weights. |
+| Vessel prior (W-Net) | [LWNet project](https://github.com/agaldran/lwnet), [DRIVE checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth) | Upstream code is MIT-licensed; checkpoint terms and training-data rights should be checked separately. This checkpoint is not verified as drop-in compatible; see [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md). |
+| Fovea/optic-disc localization | [Fundus Image Toolbox](https://github.com/berenslab/fundus_image_toolbox), [Zenodo weights](https://zenodo.org/records/11174642) | The Zenodo record is open access but does not declare a checkpoint license. Do not redistribute these weights or treat them as license-cleared without confirmation from the authors. |
 
-The checkpoints are separate from the code license and must be obtained under
-their own terms.
+The model names accepted by this code do not grant access to weights. In
+particular, the DINOv3 teacher initialization is not the PostGD student
+checkpoint, and no PostGD-trained student checkpoint is currently available
+for direct download.
 
 ## Stage 1: synthetic image generation
 
@@ -150,6 +155,10 @@ python stage1/full_method/generate.py \
   --output-size 224 \
   --output-dir /path/to/runs/stage1_smoke
 ```
+
+`--no-prior` disables vessel segmentation, fovea localization, and optic-disc
+localization. It is a geometry-only rendering path; spots may overlap vessels
+or other anatomy. It does not provide automatic anatomical detection.
 
 The default 20,000-image configuration uses two approved spot profiles:
 
@@ -215,8 +224,11 @@ POSTGD_VESSEL_MODEL=/path/to/wnet_model_directory
 POSTGD_FOVEA_MODEL_DIR=/path/to/fovea_od_model_directory
 ```
 
-The prior adapter is deliberately external: checkpoints and the clinical
-training data used to obtain them are not included in this repository.
+Prior checkpoints and the clinical training data used to obtain them are not
+included in this repository. The current adapter also depends on model code
+that is not bundled here, so downloading a checkpoint alone does not make the
+anatomy-aware path ready to run. See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)
+for compatibility and licensing details.
 
 ## Stage 2: teacher–student distillation
 
@@ -300,7 +312,7 @@ frozen PostGD backbone
 
 ## Data, weights, and privacy
 
-The following are not included:
+The following are not included in this repository:
 
 - hospital or patient images;
 - external validation images and labels;
@@ -308,6 +320,12 @@ The following are not included:
 - DINOv3 checkpoints;
 - vessel/fovea localization checkpoints;
 - generated image collections and experiment logs.
+
+Links to upstream checkpoints are not a blanket license or legal guarantee.
+Review the exact model, base-model, and dataset terms before use or
+redistribution. In particular, the fovea/optic-disc checkpoint has no license
+declared in its Zenodo record, and the PostGD distilled student is not publicly
+hosted.
 
 Before running on clinical data, verify that you have the required data-use
 permissions. Fit Lab color profiles on the training reference set only; do not
