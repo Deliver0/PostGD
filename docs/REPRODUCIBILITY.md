@@ -7,9 +7,19 @@ experiment contract.
 ## Before stage 1
 
 - [ ] Install `stage1/full_method/requirements.txt`.
-- [ ] Make Stable Diffusion components and the fine-tuned UNet available locally.
-- [ ] Make the vessel and fovea/optic-disc prior checkpoints available, or
-      explicitly use `--no-prior`.
+- [ ] Download the [ReSDv1.4 fine-tuned UNet](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip)
+      and extract it so `models/sd-retina-model/checkpoint-60000/unet/` exists.
+      The base `CompVis/stable-diffusion-v1-4` components are loaded from the
+      Hugging Face cache (or downloaded with the explicit `--allow-download`
+      flag).
+- [ ] For the formal prior path, download the [LWNet DRIVE binary checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth)
+      to `engine/experiments/wnet_drive/model_checkpoint.pth`. The exact
+      formal server run used this `wnet` checkpoint at 512px. The historical
+      GUI's `big_wnet` DRIVE/HRF pair is a separate path.
+- [ ] Install the upstream `fundus_image_toolbox`; its fovea/optic-disc
+      loader downloads [Zenodo weights](https://zenodo.org/records/11174642)
+      when the configured checkpoint directory is absent, or explicitly use
+      `--no-prior`.
 - [ ] Fit the Lab profile using training reference images only.
 - [ ] Store the generated data outside the repository.
 
@@ -67,4 +77,3 @@ final metrics
 ```
 
 Do not select a candidate, epoch, or threshold using query/external labels.
-

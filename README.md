@@ -114,16 +114,59 @@ source's terms.
 | Component | Upstream source | Availability and use |
 |---|---|---|
 | Stable Diffusion v1.4 base components | [Hugging Face model](https://huggingface.co/CompVis/stable-diffusion-v1-4) | Use is subject to [CreativeML Open RAIL-M](https://github.com/CompVis/stable-diffusion/blob/main/LICENSE). The generator downloads only when `--allow-download` is set. |
-| Retina fine-tuned background UNet | [Zenodo record 10947092](https://zenodo.org/records/10947092), file [`sd-retina-model.zip`](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content) | The Zenodo record declares CC-BY-4.0. The checkpoint is based on Stable Diffusion, so the base model's Open RAIL-M restrictions also apply. Extract it locally; `--weight-dir` must point to the directory containing `checkpoint-60000/unet/`. |
+| Retina fine-tuned background UNet (DERETFound/ReSDv1.4) | [Zenodo record 10947092](https://zenodo.org/records/10947092), file [`sd-retina-model.zip`](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content) | Directly downloadable. The tested file is `checkpoint-60000/unet/diffusion_pytorch_model.bin` (Zenodo MD5 `76e5aee5c54c79bdd0260aa344dc72fe` for the ZIP). The record declares CC-BY-4.0; Stable Diffusion Open RAIL-M restrictions also apply. |
 | DINOv3 ViT-B/16 initialization | [Meta access page](https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/), [official Hugging Face collection](https://huggingface.co/collections/facebook/dinov3-68924841bd6b561778e31009), [official repository](https://github.com/facebookresearch/dinov3) | Gated: request access and accept Meta's [DINOv3 license](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md). The repository does not mirror these weights. |
 | PostGD distilled student | No public download | `student_final.pth` is a PostGD training output and is not currently published. Reproduce it with Stage 2 after obtaining permitted DINOv3 initialization weights. |
-| Vessel prior (W-Net) | [LWNet project](https://github.com/agaldran/lwnet), [DRIVE checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth) | Upstream code is MIT-licensed; checkpoint terms and training-data rights should be checked separately. This checkpoint is not verified as drop-in compatible; see [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md). |
+| Vessel prior used by the formal 20k run | [LWNet project](https://github.com/agaldran/lwnet), [`wnet_drive/model_checkpoint.pth`](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth) | Directly downloadable. This is the binary W-Net (`model_name=wnet`, 512px, DRIVE) used by the server's `stage1_20k` run; the SHA-256 of that upstream file is `91f0cada4b26ece63464b05be60f9b3a51f1bcd1f764081d07d3a35961118de1`. |
+| Historical GUI vessel models | [DRIVE A/V checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/big_wnet_drive_av/model_checkpoint.pth), [HRF A/V checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/big_wnet_hrf_av_1024/model_checkpoint.pth) | Directly downloadable from the same upstream repository. These `big_wnet` models (512px/1024px) were used by the historical `xingai.py` GUI, not by the formal `stage1_20k` path. |
 | Fovea/optic-disc localization | [Fundus Image Toolbox](https://github.com/berenslab/fundus_image_toolbox), [Zenodo weights](https://zenodo.org/records/11174642) | The Zenodo record is open access but does not declare a checkpoint license. Do not redistribute these weights or treat them as license-cleared without confirmation from the authors. |
 
 The model names accepted by this code do not grant access to weights. In
 particular, the DINOv3 teacher initialization is not the PostGD student
 checkpoint, and no PostGD-trained student checkpoint is currently available
 for direct download.
+
+### Verified Stage 1 model layout
+
+The server run recorded in `stage1_20k/_stage1_config.json` had
+`blood_vessel_avoidance=true`. Its log reports `vessel=ok` and `fovea_od=ok`
+for all four backgrounds. The corresponding local layout is:
+
+```text
+models/sd-retina-model/checkpoint-60000/unet/
+  config.json
+  diffusion_pytorch_model.bin
+engine/experiments/wnet_drive/
+  model_checkpoint.pth
+engine/fit_models/2024-05-07 11_13.05/
+  multi_efficientnet-b3_best.pt
+```
+
+The fovea/optic-disc file is downloaded by
+`fundus_image_toolbox.load_fovea_od_model()` from [Zenodo record
+11174642](https://zenodo.org/records/11174642) when the configured local
+directory is absent. The public repository does not mirror these files.
+
+For the two model assets used by the formal Stage 1 path, the upstream files
+can be obtained directly (Linux/macOS example):
+
+```bash
+mkdir -p models engine/experiments/wnet_drive
+curl -L --fail \
+  https://zenodo.org/api/records/10947092/files/sd-retina-model.zip \
+  -o /tmp/sd-retina-model.zip
+unzip -q /tmp/sd-retina-model.zip -d models
+curl -L --fail \
+  https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth \
+  -o engine/experiments/wnet_drive/model_checkpoint.pth
+```
+
+The first archive should leave
+`models/sd-retina-model/checkpoint-60000/unet/diffusion_pytorch_model.bin`.
+The W-Net checkpoint is loaded by the historical `engine.models` implementation
+used in the formal server run; that implementation is not mirrored in this
+minimal public repository, so the download does not by itself add the missing
+Python loader.
 
 ## Stage 1: synthetic image generation
 

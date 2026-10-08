@@ -7,6 +7,23 @@ The default generator expects externally supplied model assets. Use
 `--background-dir` to reuse existing backgrounds, and `--no-prior` only for a
 deliberate geometry-only run.
 
+The formal server run used the following directly obtainable assets:
+
+- Backgrounds: DERETFound/ReSDv1.4 fine-tuned UNet from
+  [Zenodo `sd-retina-model.zip`](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content),
+  extracted as `models/sd-retina-model/checkpoint-60000/unet/`, together with
+  the `CompVis/stable-diffusion-v1-4` base components.
+- Vessel prior: the binary DRIVE W-Net checkpoint
+  [`wnet_drive/model_checkpoint.pth`](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth),
+  placed at `engine/experiments/wnet_drive/model_checkpoint.pth`.
+- Fovea/optic-disc prior: the upstream
+  [Fundus Image Toolbox Zenodo weights](https://zenodo.org/records/11174642),
+  which the toolbox can download when absent.
+
+The clean public release does not include the historical `engine.models` and
+`engine.utils` loader used by that server run. The checkpoint links are valid,
+but the anatomy-prior path requires that compatible loader dependency as well.
+
 Fit a profile from training reference images before calibration:
 
 ```bash
