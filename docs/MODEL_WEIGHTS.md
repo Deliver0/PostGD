@@ -245,6 +245,43 @@ Before adding a public URL to this README:
 3. Verify the published file with the SHA-256 above, then add the permanent URL
    and the exact revision to this document and the root README.
 
+## 8. Hugging Face release procedure
+
+Create a new **Model** repository on Hugging Face, for example
+`Deliver0/postgd-dinov3-student`. Upload only PostGD-owned release artifacts:
+
+```text
+student_final.pth       formal PostGD distilled student
+config.json             sanitized training configuration
+SHA256SUMS              checksum for student_final.pth
+README.md               model card and upstream attribution
+```
+
+Do not upload the DINOv3 teacher initialization, Stable Diffusion base or
+fine-tuned UNet, LWNet W-Net, Fundus Image Toolbox fovea/optic-disc checkpoint,
+clinical images, or `last_checkpoint.pt`. Those are third-party or private
+artifacts. The current code uses fovea (macula) and optic-disc localization;
+there is no separate PostGD optic-cup model in this release.
+
+After creating the repository in the Hugging Face web interface, upload the
+prepared folder with the official CLI:
+
+```bash
+python -m pip install -U huggingface_hub
+hf auth login
+hf upload Deliver0/postgd-dinov3-student \
+  ./postgd-student-release . \
+  --repo-type model
+```
+
+The 326.75 MiB file is handled by Hugging Face storage without adding it to the
+GitHub repository. Keep the repository private until the DINOv3 license review
+is complete, then switch it to public and add the resulting URL to this guide.
+The model card should state that `student_final.pth` is a raw
+`vit_base_patch16_dinov3` state dict, include the training configuration and
+SHA-256, link to the DINOv3 license, and say that the artifact is research-only
+and not a medical device.
+
 For a local verification:
 
 ```bash
