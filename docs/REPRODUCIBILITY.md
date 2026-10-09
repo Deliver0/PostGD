@@ -12,10 +12,11 @@ experiment contract.
       The base `CompVis/stable-diffusion-v1-4` components are loaded from the
       Hugging Face cache (or downloaded with the explicit `--allow-download`
       flag).
-- [ ] For the formal prior path, download the [LWNet DRIVE binary checkpoint](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth)
+- [ ] For the formal prior path, download the [LWNet DRIVE binary checkpoint](https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)
       to `engine/experiments/wnet_drive/model_checkpoint.pth`. The exact
-      formal server run used this `wnet` checkpoint at 512px. The historical
-      GUI's `big_wnet` DRIVE/HRF pair is a separate path.
+      formal server run used this `wnet` checkpoint at 512px. Its pinned source
+      is the [LWNet GitHub file](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth).
+      The historical GUI's `big_wnet` DRIVE/HRF pair is a separate path.
 - [ ] Install the upstream `fundus_image_toolbox`; its fovea/optic-disc
       loader downloads [Zenodo weights](https://zenodo.org/records/11174642)
       when the configured checkpoint directory is absent, or explicitly use

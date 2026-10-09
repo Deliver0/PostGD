@@ -142,7 +142,8 @@ and must be accepted/downloaded under its Open RAIL-M terms.
 ### Vessel and fovea/optic-disc priors
 
 The formal Stage 1 run used the directly downloadable LWNet DRIVE binary
-[`wnet_drive/model_checkpoint.pth`](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth),
+[`wnet_drive/model_checkpoint.pth` source on GitHub](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)
+([direct jsDelivr download](https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)),
 stored under `models/wnet_drive/`. The public prior adapter still imports the
 historical `engine.models` and `engine.utils` loader, which is not part of this
 minimal checkout; downloading the file alone therefore does not make the

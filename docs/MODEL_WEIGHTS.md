@@ -91,10 +91,14 @@ DRIVE. It is directly downloadable from the upstream repository:
 ```bash
 mkdir -p "$POSTGD_WEIGHTS/wnet_drive"
 curl -L --fail \
-  https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth \
+  https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth \
   -o "$POSTGD_WEIGHTS/wnet_drive/model_checkpoint.pth"
 sha256sum "$POSTGD_WEIGHTS/wnet_drive/model_checkpoint.pth"
 ```
+
+The [pinned file on GitHub](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)
+is the source reference. The download command uses jsDelivr because some
+networks cannot reach `raw.githubusercontent.com` reliably.
 
 Expected SHA-256:
 

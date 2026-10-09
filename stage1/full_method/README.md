@@ -14,7 +14,8 @@ The formal server run used the following directly obtainable assets:
   extracted as `models/sd-retina-model/checkpoint-60000/unet/`, together with
   the `CompVis/stable-diffusion-v1-4` base components.
 - Vessel prior: the binary DRIVE W-Net checkpoint
-  [`wnet_drive/model_checkpoint.pth`](https://raw.githubusercontent.com/agaldran/lwnet/master/experiments/wnet_drive/model_checkpoint.pth),
+  [`wnet_drive/model_checkpoint.pth` source](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth),
+  with a [jsDelivr direct download](https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth),
   placed at `engine/experiments/wnet_drive/model_checkpoint.pth`.
 - Fovea/optic-disc prior: the upstream
   [Fundus Image Toolbox Zenodo weights](https://zenodo.org/records/11174642),
