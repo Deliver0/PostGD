@@ -7,9 +7,10 @@ directory:
     -> circular FOV crop -> resize to the distillation input size
 
 For a large run, backgrounds can be generated once and reused while the
-renderer varies the spot profile, seed, size, gap, and requested spot count.
-The actual number of spots remains an upper bound because anatomical avoidance
-has priority.
+renderer varies the spot profile, seed, size, ring layout, and requested spot
+count.  Spots are laid out on concentric rings around the posterior pole, so
+the requested count is an upper bound: anatomical avoidance and the FOV rim
+decide how many burns actually fit.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from spot_renderer import (  # noqa: E402
 SPOT_CASES = {
     # User-approved bright appearance without a dark centre.
     "bright_no_dark": {
-        "spot_size": 2.0,
+        "spot_size": 1.3,
         "gap": 0.001,
         "gain": 0.12,
         "num_spots": 160,
@@ -120,9 +121,19 @@ def _parser() -> argparse.ArgumentParser:
                    help="disable batch variation of spot size, gap, and count")
     p.add_argument("--spot-size", "--spot_size", type=float, default=None)
     p.add_argument("--gap", type=float, default=None)
+    p.add_argument("--gap-abs", "--gap_abs", type=float, default=None,
+                   help="additive centre spacing in pixels on top of --gap")
     p.add_argument("--gain", type=float, default=None)
     p.add_argument("--num-spots", "--num_spots", type=int, default=None,
                    help="upper bound; placement may produce fewer spots")
+    p.add_argument("--rings", type=int, default=None,
+                   help="number of concentric rings walked outwards from the posterior pole")
+    p.add_argument("--ring-step", "--ring_step", type=float, default=None,
+                   help="ring spacing at the 518x395 reference size")
+    p.add_argument("--base-radius", "--base_radius", type=float, default=None,
+                   help="innermost ring radius at the 518x395 reference size")
+    p.add_argument("--spots-per-ring", "--spots_per_ring", type=int, default=None,
+                   help="cap on spots placed on a single ring")
     p.add_argument("--dark-depth", "--dark_depth", type=float, default=None)
     p.add_argument("--dark-center", "--dark_center", type=float, default=None)
     p.add_argument("--dark-to-bright", "--dark_to_bright", type=float, default=None)
@@ -141,9 +152,13 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--vessel-model", "--vessel_model")
     p.add_argument("--fovea-model-dir", "--fovea_model_dir")
     p.add_argument("--disc-margin", "--disc_margin", type=float, default=1.5)
-    p.add_argument("--vessel-buffer", "--vessel_buffer", type=int, default=8)
+    p.add_argument("--vessel-buffer", "--vessel_buffer", type=int, default=4)
     p.add_argument("--posterior-pole-radius", "--posterior_pole_radius",
                    type=float, default=160.0)
+    p.add_argument("--avoidance-footprint-scale", "--avoidance_footprint_scale",
+                   type=float, default=0.0,
+                   help="0 requires only the spot centre to clear the vessel mask "
+                        "(historical behaviour); >0 also clears the spot footprint")
     p.add_argument("--save-prior-masks", action="store_true",
                    help="keep diagnostic prior masks in the temporary render output")
     p.add_argument("--resume", action="store_true",
@@ -377,8 +392,13 @@ def _render_config(args, index: int) -> tuple[str, RenderConfig]:
     for key, value in {
         "spot_size": args.spot_size,
         "gap": args.gap,
+        "gap_abs": args.gap_abs,
         "gain": args.gain,
         "num_spots": args.num_spots,
+        "rings": args.rings,
+        "reference_ring_step": args.ring_step,
+        "reference_base_radius": args.base_radius,
+        "max_spots_per_ring": args.spots_per_ring,
     }.items():
         if value is not None:
             values[key] = value
@@ -406,7 +426,12 @@ def _render_config(args, index: int) -> tuple[str, RenderConfig]:
         seed=int(args.render_seed) + index * 1009,
         spot_size=float(values["spot_size"]),
         gap=float(values["gap"]),
+        gap_abs=float(values.get("gap_abs", 0.10)),
         gain=float(values["gain"]),
+        rings=int(values.get("rings", 10)),
+        reference_base_radius=float(values.get("reference_base_radius", 55.0)),
+        reference_ring_step=float(values.get("reference_ring_step", 20.0)),
+        max_spots_per_ring=int(values.get("max_spots_per_ring", 50)),
         profile=ZoneProfile(**profile_values),
         no_prior=bool(args.no_prior),
         device=args.device,
@@ -415,6 +440,7 @@ def _render_config(args, index: int) -> tuple[str, RenderConfig]:
         disc_margin=float(args.disc_margin),
         vessel_buffer_px=int(args.vessel_buffer),
         posterior_pole_radius=float(args.posterior_pole_radius),
+        avoidance_footprint_scale=float(args.avoidance_footprint_scale),
         save_prior_masks=bool(args.save_prior_masks),
     )
     config.validate()

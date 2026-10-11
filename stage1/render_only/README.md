@@ -7,7 +7,7 @@ hard spot mask, metadata, and optional diagnostic prior masks.
 python render_spots.py \
   --input /path/to/background.png \
   --output-dir ./output \
-  --spot-size 2 \
+  --spot-size 1.3 \
   --gap 0.001 \
   --num-spots 160 \
   --dark-center 0 \

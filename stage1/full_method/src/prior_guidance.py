@@ -67,6 +67,9 @@ def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
     return result
 
 
+_VESSEL_CACHE: dict = {}
+
+
 def _load_vessels(image: Image.Image, cfg: PriorConfig, device: str) -> tuple[Optional[np.ndarray], str]:
     configured = cfg.vessel_model or os.environ.get("POSTGD_VESSEL_MODEL")
     if not configured:
@@ -77,23 +80,18 @@ def _load_vessels(image: Image.Image, cfg: PriorConfig, device: str) -> tuple[Op
     if not (model_path / "model_checkpoint.pth").is_file():
         return None, f"vessel checkpoint not found: {model_path / 'model_checkpoint.pth'}"
     try:
-        import torch
-        from engine.models.get_model import get_arch
-        from engine.utils.model_saving_loading import load_model
+        try:
+            from .wnet_vessel import VesselSegmenter
+        except ImportError:
+            from wnet_vessel import VesselSegmenter
 
-        model = get_arch("wnet", n_classes=1)
-        model, _ = load_model(model, str(model_path), device)
-        model = model.to(device).eval()
-        resized = image.convert("RGB").resize((512, 512), Image.Resampling.BILINEAR)
-        tensor = torch.from_numpy(np.asarray(resized, dtype=np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
-        with torch.no_grad():
-            logits = model(tensor)
-            if isinstance(logits, (tuple, list)):
-                logits = logits[-1]
-            probability = torch.sigmoid(logits)[0, 0].detach().cpu().numpy()
-        mask = probability >= 0.5
-        mask_image = Image.fromarray(mask.astype(np.uint8) * 255, mode="L").resize(image.size, Image.Resampling.NEAREST)
-        return np.asarray(mask_image) > 0, "ok"
+        # The checkpoint is tiny but loading it per image would dominate a large
+        # run, so keep one segmenter per experiment directory.
+        segmenter = _VESSEL_CACHE.get(str(model_path))
+        if segmenter is None:
+            segmenter = VesselSegmenter(str(model_path), device=device)
+            _VESSEL_CACHE[str(model_path)] = segmenter
+        return segmenter(image), "ok"
     except Exception as exc:
         return None, f"vessel segmentation failed: {exc}"
 
@@ -153,12 +151,16 @@ def build_prior(image: Image.Image, cfg: PriorConfig, *, spot_radius: float) -> 
         )
     # The spot planner expands this semantic exclusion mask by the spot
     # footprint once. Keeping the footprint out here avoids double dilation.
-    # Without a usable vessel prediction, fail closed rather than place spots
-    # using only the non-vascular priors.
-    block = (
-        vessel_block | optic_disc | posterior
-        if vessel is not None else np.ones((h, w), dtype=bool)
-    )
+    # Without a usable vessel prediction we fail closed -- but loudly. Returning
+    # an all-true mask here used to yield blank images with only a warning line.
+    if vessel is None:
+        raise RuntimeError(
+            "vessel prior is enabled but vessel segmentation is unavailable: "
+            f"{vessel_status}. Point --vessel-model / POSTGD_VESSEL_MODEL at a "
+            "wnet_drive directory containing model_checkpoint.pth, or pass "
+            "--no-prior to render without anatomical avoidance."
+        )
+    block = vessel_block | optic_disc | posterior
     return {
         "enabled": True, "center": (ox, oy) if fovea_od is not None else fov_center,
         "avoidance_mask": block, "vessel_mask": vessel_block if vessel is not None else None,

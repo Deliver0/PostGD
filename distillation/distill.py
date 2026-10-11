@@ -1,16 +1,29 @@
 """DINOv3 teacher-student distillation on the complete stage-one dataset.
 
 One epoch is defined by one complete pass through ``data-dir``.  The default
-run therefore requires 20,000 images and does not hold out a validation split:
+run therefore requires 200,000 images and does not hold out a validation split:
 all generated images participate in every training epoch.
 
 The historical training objective is retained:
 
-    L = MSE(student_cls, teacher_cls) + beta * consistency_loss
+    L = MSE(proj(student(v1)), teacher(v1)) + beta * (1 - cos(student(v1), student(v2)))
 
-Models are loaded through timm so the local
-``vit_base_patch16_dinov3`` weights can be used without torch-hub's DINOv2
-fallback.
+The formal configuration is a DINOv3 ViT-L/16 teacher (1024-d) distilled into a
+DINOv3 ViT-B/16 student (768-d) through a ``Linear(768, 1024)`` projection.
+**Both models are initialised from pretrained weights.**  A randomly initialised
+student collapses under this objective -- with only synthetic images and no
+natural-image pretraining the student embeddings fall onto a single direction
+(pairwise cosine ~0.99, effective rank 13/384) and every downstream task then
+scores at chance.
+
+``lr`` is tied to ``SCHEDULER_REFERENCE_BATCH_SIZE`` (64) images: the formal run
+uses a global batch of 640 across 8 processes and steps the cosine schedule
+``global_batch // 64`` times per optimizer step, so ``lr=2e-4`` keeps the same
+meaning at any world size.  Layer-wise learning-rate decay (BEiT/MAE convention)
+and an EMA copy of the student are both part of the formal recipe.
+
+Models are loaded through timm so the local ``vit_base_patch16_dinov3`` weights
+can be used without torch-hub's DINOv2 fallback.
 """
 
 from __future__ import annotations
@@ -35,12 +48,16 @@ from tqdm import tqdm
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
+# ``lr`` is defined for a batch of this many images.  Larger batches step the
+# cosine schedule proportionally instead of scaling the learning rate.
+SCHEDULER_REFERENCE_BATCH_SIZE = 64
+
 
 @dataclass
 class DistillConfig:
     data_dir: str
     output_dir: str = "./runs/distill"
-    teacher_model: str = "vit_base_patch16_dinov3"
+    teacher_model: str = "vit_large_patch16_dinov3"
     student_model: str = "vit_base_patch16_dinov3"
     teacher_weights: Optional[str] = None
     student_weights: Optional[str] = None
@@ -48,14 +65,17 @@ class DistillConfig:
     img_size: int = 224
     epochs: int = 200
     batch_size: int = 64
-    lr: float = 1e-4
+    lr: float = 2e-4
     weight_decay: float = 0.05
     warmup_steps: int = 500
     beta: float = 0.1
+    layer_decay: float = 0.75
+    ema_decay: float = 0.999
+    use_ema: bool = True
     aug_strength: float = 1.0
     device: str = "cuda"
     num_workers: int = 4
-    expected_images: int = 20000
+    expected_images: int = 200000
     validation_fraction: float = 0.0
     seed: int = 42
     resume: Optional[str] = None
@@ -235,11 +255,103 @@ def _autocast(device: str):
     return torch.autocast(device_type="cpu", enabled=False)
 
 
+# ---------------------------------------------------------------------
+# Layer-wise LR decay (BEiT / MAE convention)
+# ---------------------------------------------------------------------
+
+def _layer_id(name: str, num_layers: int) -> int:
+    if name.startswith("blocks."):
+        try:
+            return int(name.split(".")[1]) + 1
+        except (IndexError, ValueError):
+            return num_layers + 1
+    if name.startswith(("patch_embed", "cls_token", "reg_token", "pos_embed",
+                        "mask_token", "storage_tokens")):
+        return 0
+    return num_layers + 1
+
+
+def _no_weight_decay(name: str, param: nn.Parameter) -> bool:
+    if param.ndim <= 1:
+        return True
+    if name.endswith(".bias"):
+        return True
+    if "gamma" in name:  # LayerScale
+        return True
+    if name in ("cls_token", "reg_token", "pos_embed", "mask_token"):
+        return True
+    if "pos_embed" in name or "cls_token" in name or "reg_token" in name:
+        return True
+    return False
+
+
+def build_param_groups(model: nn.Module, base_lr: float, weight_decay: float,
+                       layer_decay: float, num_layers: int,
+                       extra_max_layer: int = 0) -> list[dict]:
+    """Return AdamW param groups with layer-wise lr scaling and a no-decay split.
+
+    ``lr_scale = layer_decay ** (max_layer - layer_id)`` so the patch embedding
+    gets the smallest learning rate and the final norm the largest.
+    """
+    max_layer = num_layers + 1 + extra_max_layer
+    groups: dict[tuple[int, float], dict] = {}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        lid = _layer_id(name, num_layers)
+        if lid > num_layers + 1:
+            lid = num_layers + 1
+        scale = layer_decay ** (max_layer - lid)
+        wd = 0.0 if _no_weight_decay(name, param) else weight_decay
+        key = (lid, wd)
+        groups.setdefault(key, {"params": [], "lr": base_lr * scale,
+                                "weight_decay": wd, "layer_id": lid,
+                                "lr_scale": scale})
+        groups[key]["params"].append(param)
+    return [groups[k] for k in sorted(groups, key=lambda k: (k[0], k[1]))]
+
+
+# ---------------------------------------------------------------------
+# EMA student
+# ---------------------------------------------------------------------
+
+class EMAStudent(nn.Module):
+    """Exponential moving average of the student, with a warm-up ramp.
+
+    ``decay_t = min(decay, (1 + step) / (10 + step))`` so the EMA does not lag
+    the freshly-initialised student at the very beginning of training.
+    """
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        super().__init__()
+        import copy
+        self.module = copy.deepcopy(model)
+        for param in self.module.parameters():
+            param.requires_grad = False
+        self.decay = float(decay)
+        self.step = 0
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        self.step += 1
+        d = self.current_decay()
+        for ema_param, param in zip(self.module.parameters(), model.parameters()):
+            ema_param.mul_(d).add_(param.detach(), alpha=1.0 - d)
+        for ema_buf, buf in zip(self.module.buffers(), model.buffers()):
+            ema_buf.copy_(buf)
+
+    def current_decay(self) -> float:
+        return min(self.decay, (1.0 + self.step) / (10.0 + self.step))
+
+
 def train_one_epoch(student, teacher, projector, loader, optimizer, scheduler,
-                    scaler, cfg: DistillConfig, epoch: int) -> dict:
+                    scaler, cfg: DistillConfig, epoch: int, ema=None) -> dict:
     student.train()
     projector.train()
     teacher.eval()
+    # Keep ``lr`` tied to SCHEDULER_REFERENCE_BATCH_SIZE: a larger batch takes
+    # proportionally more scheduler steps per optimizer step.
+    scheduler_steps = max(1, int(cfg.batch_size) // SCHEDULER_REFERENCE_BATCH_SIZE)
     totals = {"loss": 0.0, "kd": 0.0, "cons": 0.0, "samples": 0}
     progress = tqdm(loader, desc=f"Epoch {epoch + 1}/{cfg.epochs}")
     for view1, view2 in progress:
@@ -261,8 +373,11 @@ def train_one_epoch(student, teacher, projector, loader, optimizer, scheduler,
         else:
             loss.backward()
             optimizer.step()
+        if ema is not None:
+            ema.update(student)
         if scheduler is not None:
-            scheduler.step()
+            for _ in range(scheduler_steps):
+                scheduler.step()
         batch_size = int(view1.shape[0])
         totals["loss"] += loss.item() * batch_size
         totals["kd"] += loss_kd.item() * batch_size
@@ -302,23 +417,31 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", "--data_dir", required=True)
     parser.add_argument("--output-dir", "--output_dir", default="./runs/distill")
     parser.add_argument("--teacher-model", "--teacher",
-                        default="vit_base_patch16_dinov3")
+                        default="vit_large_patch16_dinov3")
     parser.add_argument("--student-model", "--student",
                         default="vit_base_patch16_dinov3")
     parser.add_argument("--teacher-weights")
     parser.add_argument("--student-weights")
-    parser.add_argument("--no-pretrained", action="store_true")
+    parser.add_argument("--no-pretrained", action="store_true",
+                        help="initialise the student randomly; not recommended, "
+                             "the student collapses under this objective")
     parser.add_argument("--img-size", "--img_size", type=int, default=224)
     parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch-size", "--batch_size", type=int, default=64)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--batch-size", "--batch_size", type=int, default=64,
+                        help="images per optimizer step; lr is tied to "
+                             f"{SCHEDULER_REFERENCE_BATCH_SIZE}")
+    parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight-decay", "--weight_decay", type=float, default=0.05)
     parser.add_argument("--warmup-steps", "--warmup_steps", type=int, default=500)
     parser.add_argument("--beta", type=float, default=0.1)
+    parser.add_argument("--layer-decay", "--layer_decay", type=float, default=0.75,
+                        help="BEiT/MAE layer-wise lr decay")
+    parser.add_argument("--ema-decay", "--ema_decay", type=float, default=0.999)
+    parser.add_argument("--no-ema", action="store_true")
     parser.add_argument("--aug-strength", "--aug_strength", type=float, default=1.0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--num-workers", "--num_workers", type=int, default=4)
-    parser.add_argument("--expected-images", "--expected_images", type=int, default=20000)
+    parser.add_argument("--expected-images", "--expected_images", type=int, default=200000)
     parser.add_argument("--validation-fraction", "--validation_fraction",
                         type=float, default=0.0,
                         help="0 keeps all images in every training epoch")
@@ -389,14 +512,30 @@ def run(cfg: DistillConfig) -> None:
     projector = (nn.Identity() if student_dim == teacher_dim
                  else nn.Linear(student_dim, teacher_dim)).to(cfg.device)
 
-    optimizer = torch.optim.AdamW(
-        list(student.parameters()) + list(projector.parameters()),
-        lr=cfg.lr,
-        weight_decay=cfg.weight_decay,
+    num_layers = len(getattr(student, "blocks", []))
+    param_groups = build_param_groups(
+        student, cfg.lr, cfg.weight_decay, cfg.layer_decay, num_layers
     )
-    total_steps = max(1, cfg.epochs * len(train_loader))
+    if not isinstance(projector, nn.Identity):
+        param_groups += build_param_groups(
+            projector, cfg.lr, cfg.weight_decay, cfg.layer_decay, num_layers,
+        )
+    print(
+        f"[Distill] teacher_dim={teacher_dim} student_dim={student_dim} "
+        f"layer_decay={cfg.layer_decay} num_layers={num_layers} "
+        f"param_groups={len(param_groups)}"
+    )
+
+    optimizer = torch.optim.AdamW(param_groups, lr=cfg.lr,
+                                  weight_decay=cfg.weight_decay)
+    scheduler_steps_per_epoch = -(-len(train_dataset) // SCHEDULER_REFERENCE_BATCH_SIZE)
+    total_steps = max(1, cfg.epochs * scheduler_steps_per_epoch)
     scheduler = _make_scheduler(optimizer, total_steps, cfg.warmup_steps)
     scaler = torch.cuda.amp.GradScaler() if cfg.device.startswith("cuda") else None
+
+    ema = EMAStudent(student, cfg.ema_decay).to(cfg.device) if cfg.use_ema else None
+    if ema is not None:
+        print(f"[Distill] EMA enabled, decay={cfg.ema_decay}")
 
     start_epoch = 0
     if cfg.resume:
@@ -405,6 +544,8 @@ def run(cfg: DistillConfig) -> None:
         projector.load_state_dict(checkpoint["projector"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         scheduler.load_state_dict(checkpoint["scheduler"])
+        if ema is not None and "ema" in checkpoint:
+            ema.load_state_dict(checkpoint["ema"])
         start_epoch = int(checkpoint["epoch"]) + 1
         print(f"[Distill] resumed at epoch {start_epoch}")
 
@@ -416,12 +557,14 @@ def run(cfg: DistillConfig) -> None:
     for epoch in range(start_epoch, cfg.epochs):
         train_metrics = train_one_epoch(
             student, teacher, projector, train_loader, optimizer, scheduler,
-            scaler, cfg, epoch
+            scaler, cfg, epoch, ema=ema
         )
         record = {"epoch": epoch + 1, "train": train_metrics}
+        if ema is not None:
+            record["ema_decay"] = ema.current_decay()
         with metrics_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
-        torch.save({
+        checkpoint = {
             "epoch": epoch,
             "student": student.state_dict(),
             "projector": projector.state_dict(),
@@ -429,7 +572,10 @@ def run(cfg: DistillConfig) -> None:
             "scheduler": scheduler.state_dict(),
             "train_metrics": train_metrics,
             "config": asdict(cfg),
-        }, output_dir / "last_checkpoint.pt")
+        }
+        if ema is not None:
+            checkpoint["ema"] = ema.state_dict()
+        torch.save(checkpoint, output_dir / "last_checkpoint.pt")
         print(
             f"Epoch {epoch + 1}/{cfg.epochs} | "
             f"samples={train_metrics['samples']} "
@@ -441,6 +587,8 @@ def run(cfg: DistillConfig) -> None:
 
     torch.save(student.state_dict(), output_dir / "student_final.pth")
     torch.save(projector.state_dict(), output_dir / "student_to_teacher_projection.pth")
+    if ema is not None:
+        torch.save(ema.module.state_dict(), output_dir / "student_ema_final.pth")
     print(f"[Distill] complete: {output_dir}")
 
 
@@ -461,6 +609,9 @@ def main() -> None:
         weight_decay=args.weight_decay,
         warmup_steps=args.warmup_steps,
         beta=args.beta,
+        layer_decay=args.layer_decay,
+        ema_decay=args.ema_decay,
+        use_ema=not args.no_ema,
         aug_strength=args.aug_strength,
         device=args.device,
         num_workers=args.num_workers,

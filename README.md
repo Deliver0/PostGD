@@ -213,7 +213,7 @@ The default 20,000-image configuration uses two approved spot profiles:
 
 ```text
 bright_no_dark:
-  spot_size=2.0, gap=0.001, gain=0.12
+  spot_size=1.3, gap=0.001, gain=0.12
   dark_center=0, dark_to_bright=0, bright_zone=0.20
   fade_zone=0.80, dark_depth=0
 
@@ -245,7 +245,7 @@ The standalone renderer accepts an existing RGB fundus background:
 python stage1/render_only/render_spots.py \
   --input /path/to/background.png \
   --output-dir ./output \
-  --spot-size 2 \
+  --spot-size 1.3 \
   --gap 0.001 \
   --num-spots 160 \
   --dark-center 0 \

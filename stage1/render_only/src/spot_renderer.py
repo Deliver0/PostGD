@@ -153,12 +153,26 @@ class RenderConfig:
     seed: int = 42
     spot_size: float = 1.0
     gap: float = 0.10
+    gap_abs: float = 0.10
     gain: float = 0.20
+    # Legacy geometric floor from the uniform sampler.  It is kept so older
+    # call sites keep working, but the posterior pole below is the governing
+    # exclusion for the ring layout.
     central_exclusion: float = 0.18
     max_attempts_per_spot: int = 250
-    warm_r: float = 1.04
-    warm_g: float = 1.02
-    warm_b: float = 1.00
+    # Ring layout, authored at REFERENCE_SIZE and rescaled to the working
+    # resolution.  Defaults are the clinical PRP treatment plan.
+    rings: int = 10
+    reference_base_radius: float = 55.0
+    reference_ring_step: float = 20.0
+    max_spots_per_ring: int = 50
+    angular_jitter: float = 0.12
+    radial_jitter: float = 0.10
+    # Warm (orange) laser-scar tint applied as region * (1 + gain * m * warm).
+    # These are the values validated against real post-operative fundus images.
+    warm_r: float = 1.80
+    warm_g: float = 0.85
+    warm_b: float = 0.40
     profile: ZoneProfile = ZoneProfile()
     # Historical prior-guided placement.  The local W-Net and fovea/OD
     # checkpoints are used when available; --no-prior keeps the lightweight
@@ -168,19 +182,34 @@ class RenderConfig:
     vessel_model: Optional[str] = None
     fovea_model_dir: Optional[str] = None
     disc_margin: float = 1.5
-    vessel_buffer_px: int = 8
+    vessel_buffer_px: int = 4
     posterior_pole_radius: float = 160.0
+    # The historical renderer required the spot *centre* to clear the buffered
+    # vessel mask, so this was effectively 0.  Raising it additionally requires
+    # the whole spot footprint to clear the mask; that is stricter and leaves
+    # far fewer burns, so 0.0 keeps the formal Stage 1 layout.
+    avoidance_footprint_scale: float = 0.0
     save_prior_masks: bool = True
 
     def validate(self) -> None:
         if self.num_spots < 0:
             raise ValueError("num_spots must be >= 0")
-        if self.spot_size <= 0 or self.gap < 0 or self.gain < 0:
-            raise ValueError("spot_size, gap and gain must be non-negative (spot_size > 0)")
+        if self.spot_size <= 0 or self.gap < 0 or self.gap_abs < 0 or self.gain < 0:
+            raise ValueError("spot_size, gap, gap_abs and gain must be non-negative (spot_size > 0)")
         if not 0 <= self.central_exclusion < 1:
             raise ValueError("central_exclusion must be in [0, 1)")
         if self.max_attempts_per_spot < 1:
             raise ValueError("max_attempts_per_spot must be positive")
+        if self.rings < 1:
+            raise ValueError("rings must be >= 1")
+        if self.reference_base_radius < 0 or self.reference_ring_step <= 0:
+            raise ValueError("reference_base_radius must be >= 0 and reference_ring_step > 0")
+        if self.max_spots_per_ring < 6:
+            raise ValueError("max_spots_per_ring must be >= 6")
+        if self.angular_jitter < 0 or self.radial_jitter < 0:
+            raise ValueError("angular_jitter and radial_jitter must be non-negative")
+        if self.avoidance_footprint_scale < 0:
+            raise ValueError("avoidance_footprint_scale must be non-negative")
         self.profile.validate()
 
 
@@ -230,6 +259,12 @@ def _stable_seed(seed: int, image_key: str) -> int:
     return (int(seed) + int.from_bytes(digest[:4], "little")) % (2**32)
 
 
+# Ring radii are authored at the size of the clinical treatment-planning view
+# and rescaled to whatever background resolution is being rendered, so the PRP
+# layout is identical at 512x512 and at a native 2300x1830 fundus.
+REFERENCE_SIZE = (518.0, 395.0)
+
+
 def plan_spots(
     fov_mask: np.ndarray,
     config: RenderConfig,
@@ -237,28 +272,59 @@ def plan_spots(
     center: Optional[tuple[float, float]] = None,
     avoidance_mask: Optional[np.ndarray] = None,
 ) -> list[tuple[float, float, float]]:
-    """Place non-overlapping spots inside the FOV with a central exclusion."""
+    """Place spots on concentric rings around the posterior pole.
+
+    The historical renderer did not sample the FOV uniformly.  It walked rings
+    outwards from the posterior pole -- the optic-disc centre, following the
+    ETDRS convention -- one ``reference_ring_step`` apart, and filled each ring
+    at the density the spot footprint allows.  Odd rings are offset by half a
+    slot so neighbouring rings interleave, and every centre gets a small
+    angular and radial jitter, which is what produces the clinical PRP look.
+
+    ``num_spots`` is an upper bound, not a target: anatomical avoidance wins,
+    so the layout may place fewer spots.  A candidate is rejected when it falls
+    outside the FOV, inside the posterior-pole exclusion, on the dilated
+    vessel/optic-disc avoidance mask, or closer than the minimum centre
+    distance to an already accepted spot.
+    """
     config.validate()
     h, w = fov_mask.shape
     cx, cy, fov_radius = _fov_geometry(fov_mask)
     if center is not None:
         cx, cy = float(center[0]), float(center[1])
-    rng = random.Random(int(config.seed))
-    base_radius = max(2.0, 0.018 * min(h, w) * float(config.spot_size))
-    min_distance = max(2.0, 2.0 * base_radius * (1.0 + float(config.gap)))
-    exclusion_radius = float(config.central_exclusion) * fov_radius
     ys, xs = np.nonzero(fov_mask)
     if len(xs) == 0 or config.num_spots == 0:
         return []
-    xmin, xmax = int(xs.min()), int(xs.max())
-    ymin, ymax = int(ys.min()), int(ys.max())
+
+    rng = random.Random(int(config.seed))
+    scale = min(w / REFERENCE_SIZE[0], h / REFERENCE_SIZE[1])
+
+    spot_radius = max(2.0, 0.018 * min(h, w) * float(config.spot_size))
+    spot_diameter = 2.0 * spot_radius
+    ring_gap = spot_diameter * float(config.gap) + float(config.gap_abs)
+    min_distance = max(ring_gap * 0.85, spot_diameter * 0.92)
+    exclusion_radius = max(
+        float(config.posterior_pole_radius) * scale,
+        float(config.central_exclusion) * fov_radius,
+    )
+    base_radius = float(config.reference_base_radius) * scale
+    ring_step = float(config.reference_ring_step) * scale
+
+    n_rings = int(config.rings)
+    if config.num_spots > 0:
+        # Let the outward walk keep going when a larger count is requested
+        # than the nominal ring budget can hold; the FOV rim stops it anyway.
+        n_rings = max(n_rings, 24)
 
     accepted: list[tuple[float, float, float]] = []
     avoidance_for_centers = avoidance_mask
     if avoidance_mask is not None:
         if avoidance_mask.shape != fov_mask.shape:
             raise ValueError("avoidance_mask must have the same shape as the background")
-        footprint_radius = int(math.ceil(base_radius * 1.12 * MAX_SPOT_SHAPE_SCALE + 2.0))
+        footprint_radius = int(math.ceil(
+            spot_radius * 1.12 * MAX_SPOT_SHAPE_SCALE
+            * float(config.avoidance_footprint_scale) + 2.0
+        ))
         if footprint_radius > 0:
             if cv2 is not None:
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
@@ -270,24 +336,34 @@ def plan_spots(
                 avoidance_for_centers = np.asarray(
                     expanded.filter(ImageFilter.MaxFilter(size=size))
                 ) > 0
-    attempts = 0
-    limit = max(1, int(config.num_spots) * int(config.max_attempts_per_spot))
-    while len(accepted) < int(config.num_spots) and attempts < limit:
-        attempts += 1
-        px = rng.uniform(xmin, xmax)
-        py = rng.uniform(ymin, ymax)
-        ix, iy = int(round(px)), int(round(py))
-        if not (0 <= ix < w and 0 <= iy < h and fov_mask[iy, ix]):
-            continue
-        if math.hypot(px - cx, py - cy) < exclusion_radius:
-            continue
-        if avoidance_for_centers is not None:
-            if avoidance_for_centers[iy, ix]:
+
+    for ring_index in range(n_rings):
+        ring_radius = base_radius + (ring_index + 1) * ring_step
+        circumference = 2.0 * math.pi * ring_radius
+        slots = max(6, int(circumference / max(ring_gap, 1e-6)))
+        slots = min(slots, int(config.max_spots_per_ring))
+        offset = 0.0 if ring_index % 2 == 0 else math.pi / slots
+        for slot in range(slots):
+            angle = 2.0 * math.pi * slot / slots + offset
+            angle += rng.uniform(-float(config.angular_jitter), float(config.angular_jitter))
+            radius = ring_radius + rng.uniform(
+                -ring_step * float(config.radial_jitter),
+                ring_step * float(config.radial_jitter),
+            )
+            px = cx + radius * math.cos(angle)
+            py = cy + radius * math.sin(angle)
+            ix, iy = int(round(px)), int(round(py))
+            if not (0 <= ix < w and 0 <= iy < h and fov_mask[iy, ix]):
                 continue
-        if any(math.hypot(px - qx, py - qy) < min_distance for qx, qy, _ in accepted):
-            continue
-        jitter = rng.uniform(0.88, 1.12)
-        accepted.append((px, py, jitter))
+            if math.hypot(px - cx, py - cy) < exclusion_radius:
+                continue
+            if avoidance_for_centers is not None and avoidance_for_centers[iy, ix]:
+                continue
+            if any(math.hypot(px - qx, py - qy) < min_distance for qx, qy, _ in accepted):
+                continue
+            accepted.append((px, py, rng.uniform(0.88, 1.12)))
+            if len(accepted) >= int(config.num_spots):
+                return accepted
     return accepted
 
 
@@ -475,14 +551,26 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", "--output_dir", default="./output")
     p.add_argument("--num-spots", "--num_spots", type=int, default=50)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--spot-size", "--spot_size", type=float, default=1.0)
+    p.add_argument("--spot-size", "--spot_size", type=float, default=1.3)
     p.add_argument("--gap", type=float, default=0.10)
+    p.add_argument("--gap-abs", "--gap_abs", type=float, default=0.10,
+                   help="additive centre spacing in pixels on top of --gap")
+    p.add_argument("--rings", type=int, default=10,
+                   help="number of concentric rings walked outwards from the posterior pole")
+    p.add_argument("--ring-step", "--ring_step", type=float, default=20.0,
+                   help="ring spacing at the 518x395 reference size")
+    p.add_argument("--base-radius", "--base_radius", type=float, default=55.0,
+                   help="innermost ring radius at the 518x395 reference size")
+    p.add_argument("--spots-per-ring", "--spots_per_ring", type=int, default=50,
+                   help="cap on spots placed on a single ring")
     p.add_argument("--gain", type=float, default=0.20)
-    p.add_argument("--dark-depth", "--dark_depth", type=float, default=0.5)
-    p.add_argument("--dark-center", "--dark_center", type=float, default=0.5)
-    p.add_argument("--dark-to-bright", "--dark_to_bright", type=float, default=0.1)
+    # Default profile is the approved solid "bright_no_dark" appearance
+    # (no artificial dark centre), matching full_method/generate.py.
+    p.add_argument("--dark-depth", "--dark_depth", type=float, default=0.0)
+    p.add_argument("--dark-center", "--dark_center", type=float, default=0.0)
+    p.add_argument("--dark-to-bright", "--dark_to_bright", type=float, default=0.0)
     p.add_argument("--bright-zone", "--bright_zone", type=float, default=0.2)
-    p.add_argument("--fade-zone", "--fade_zone", type=float, default=0.2)
+    p.add_argument("--fade-zone", "--fade_zone", type=float, default=0.8)
     p.add_argument("--ring-mode", "--ring_mode", action="store_true",
                    help="use a narrow bright-ring profile with independent shoulders")
     p.add_argument("--ring-center", "--ring_center", type=float, default=0.65)
@@ -497,8 +585,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--vessel-model", "--vessel_model")
     p.add_argument("--fovea-model-dir", "--fovea_model_dir")
     p.add_argument("--disc-margin", "--disc_margin", type=float, default=1.5)
-    p.add_argument("--vessel-buffer", "--vessel_buffer", type=int, default=8)
+    p.add_argument("--vessel-buffer", "--vessel_buffer", type=int, default=4)
     p.add_argument("--posterior-pole-radius", "--posterior_pole_radius", type=float, default=160.0)
+    p.add_argument("--avoidance-footprint-scale", "--avoidance_footprint_scale",
+                   type=float, default=0.0,
+                   help="0 requires only the spot centre to clear the vessel mask "
+                        "(historical behaviour); >0 also clears the spot footprint")
     p.add_argument("--no-prior-masks", action="store_true",
                    help="do not save diagnostic avoidance/vessel/OD/posterior masks")
     return p
@@ -516,11 +608,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ring_shoulder_power=args.ring_shoulder_power,
     )
     config = RenderConfig(num_spots=args.num_spots, seed=args.seed, spot_size=args.spot_size,
-                          gap=args.gap, gain=args.gain, profile=profile,
+                          gap=args.gap, gap_abs=args.gap_abs, gain=args.gain, profile=profile,
+                          rings=args.rings, reference_base_radius=args.base_radius,
+                          reference_ring_step=args.ring_step,
+                          max_spots_per_ring=args.spots_per_ring,
                           no_prior=args.no_prior, device=args.device,
                           vessel_model=args.vessel_model, fovea_model_dir=args.fovea_model_dir,
                           disc_margin=args.disc_margin, vessel_buffer_px=args.vessel_buffer,
                           posterior_pole_radius=args.posterior_pole_radius,
+                          avoidance_footprint_scale=args.avoidance_footprint_scale,
                           save_prior_masks=not args.no_prior_masks)
     render_background(args.input, args.output_dir, config, avoidance_mask_path=args.avoidance_mask)
 
