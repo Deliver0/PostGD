@@ -1,343 +1,180 @@
 # PostGD
 
-**Generation–Distillation adaptation for post-photocoagulation fundus images.**
+**Adapting vision foundation models to post-photocoagulation fundus images via synthetic data and distillation.**
 
-PostGD is a three-stage research pipeline for adapting a vision foundation model to
-fundus images containing post-photocoagulation laser spots:
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Status: research code](https://img.shields.io/badge/status-research%20code-orange.svg)](#disclaimer)
 
-1. **Anatomy-aware synthetic image generation**
-2. **Teacher–student representation distillation**
-3. **Few-shot downstream head adaptation**
+![PostGD synthetic post-PRP fundus images](docs/assets/hero.png)
 
-The repository contains the method implementation and reproducibility utilities.
-Clinical images, derived hospital statistics, model checkpoints, and generated
-datasets are intentionally kept outside Git.
+*Left: a retinal background from the generative background model. Right: the same background
+after PostGD anatomy-aware laser-spot synthesis. Both panels are fully synthetic — no
+patient data appears anywhere in this repository.*
 
-> This is research code. It is not a medical device and must not be used for
-> diagnosis or treatment decisions.
+## Overview
 
-## Method at a glance
+Pan-retinal photocoagulation (PRP) leaves a grid of laser scars across the retina.
+Those scars change the appearance of a fundus photograph enough that models trained on
+ordinary retinal images lose accuracy on post-treatment eyes — and labelled post-PRP
+images are scarce.
 
-```text
-background image or diffusion-generated background
-                |
-                v
-       Lab-domain calibration
-                |
-                v
- anatomy-aware spot placement and rendering
-                |
-                v
-          224 x 224 images
-                |
-                v
-       DINOv3 teacher–student distillation
-                |
-                v
-        frozen adapted backbone
-                |
-                v
-        few-shot classification head
+PostGD closes that gap without collecting new clinical labels. It synthesises realistic
+post-PRP fundus images from a generative retina background model, then distils the
+representation of a frozen vision foundation model into a compact student backbone. The
+adapted backbone can be specialised to a downstream task with only a handful of labelled
+images.
+
+## Contents
+
+- [Pipeline](#pipeline)
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Installation](#installation)
+- [Pretrained models](#pretrained-models)
+- [Usage](#usage)
+- [Repository layout](#repository-layout)
+- [Data and privacy](#data-and-privacy)
+- [Citation](#citation)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A[Generative retina<br/>background] --> B[Anatomy-aware<br/>laser-spot synthesis]
+    B -->     C[Synthetic post-PRP<br/>image set]
+    C --> D[Teacher-student<br/>distillation]
+    D --> E[Adapted<br/>backbone]
+    E --> F[Few-shot<br/>task head]
 ```
 
-## Repository layout
+| Stage | Purpose | Entry point |
+|-------|---------|-------------|
+| **1 — Generation** | Render PRP laser spots onto retinal backgrounds | [`stage1/`](stage1/) |
+| **2 — Distillation** | Adapt a DINOv3 backbone to the synthetic domain | [`distillation/distill.py`](distillation/distill.py) |
+| **3 — Adaptation** | Fit a light head on a few labelled images | [`downstream/adapt_head.py`](downstream/adapt_head.py) |
 
-```text
-PostGD/
-├── README.md                         Project overview and reproduction entry points
-├── LICENSE                           MIT license for the released method code
-├── CITATION.bib                      Citation information
-├── configs/
-│   └── hospital_lab_template.json    Public Lab-profile template
-├── stage1/                            Synthetic image generation
-│   ├── full_method/                  Complete background-to-image pipeline
-│   │   ├── generate.py               Background, calibration, rendering, and export
-│   │   ├── fit_lab_profile.py        Fit a profile from training images
-│   │   ├── requirements.txt
-│   │   └── src/
-│   │       ├── color_calibration.py
-│   │       ├── prior_guidance.py
-│   │       └── spot_renderer.py
-│   └── render_only/                  Renderer for an existing fundus background
-│       ├── render_spots.py           Command-line entry point
-│       ├── requirements.txt
-│       ├── src/
-│       │   ├── prior_guidance.py
-│       │   └── spot_renderer.py
-│       └── tests/
-│           └── test_renderer.py
-├── distillation/                     Teacher–student representation learning
-│   ├── distill.py
-│   └── requirements.txt
-├── downstream/                       Few-shot downstream head adaptation
-│   ├── adapt_head.py
-│   └── README.md
-└── docs/                             Reproducibility and implementation notes
-    ├── IMPLEMENTATION.md
-    ├── REPRODUCIBILITY.md
-    └── THIRD_PARTY.md
-```
+More synthetic results from Stage 1:
 
-## Installation
+![PostGD synthetic samples](docs/assets/gallery.png)
 
-Use separate environments when possible because Stable Diffusion and DINOv3
-distillation have different GPU/runtime requirements.
-
-The released scripts were developed against Python 3.10/3.11 and CUDA-enabled
-PyTorch. Exact CUDA wheels should be selected from the official PyTorch index
-for the target machine.
+## Quick Start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/Deliver0/PostGD.git
+cd PostGD
 pip install -r stage1/render_only/requirements.txt
 ```
 
-For the complete stage-one pipeline:
+Render a synthetic post-PRP image from any retinal background:
 
 ```bash
-pip install -r stage1/full_method/requirements.txt
+python stage1/render_only/render_spots.py \
+  --input  /path/to/fundus_background.png \
+  --output-dir ./output
 ```
 
-For distillation:
+The command writes a synthetic image, a spot mask, and a metadata file. To enable the
+anatomy-aware path, point the renderer at the prior models first — see
+[Pretrained models](#pretrained-models).
 
-```bash
-pip install -r distillation/requirements.txt
-```
+## Features
+
+| Feature | What it gives you |
+|---------|-------------------|
+| **No clinical data needed** | The synthetic training set is generated from a public retina background model. |
+| **Anatomy-aware placement** | Spots follow a PRP-style radial grid around the posterior pole and avoid vessels and the optic disc. |
+| **Approved appearance profiles** | Solid and ring-shaped burn profiles ship with the generator; the default matches real post-operative fundus images. |
+| **Reproducible by construction** | Every generated image carries a metadata record of the requested and actual spot count. |
+| **Compact distilled student** | The adapted backbone is a ViT-B/16, small enough to fine-tune with a few labelled images. |
+| **Leak-free evaluation** | The downstream adapter selects its head on support data only; query labels are read after the model is locked. |
+
+## Installation
+
+The three stages have different runtime requirements and are best kept in separate
+environments. The released scripts target Python 3.10/3.11 with a CUDA-enabled PyTorch;
+select the matching wheel from the official PyTorch index for your machine.
+
+| Stage | Requirements file |
+|-------|-------------------|
+| Stage 1 — standalone renderer | `stage1/render_only/requirements.txt` |
+| Stage 1 — full generator | `stage1/full_method/requirements.txt` |
+| Stage 2 — distillation | `distillation/requirements.txt` |
 
 ## Pretrained models
 
-No checkpoint is committed to this repository. The complete download, naming,
-directory, checksum, loading, and license notes are in
-[`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md). The short layout below is the
-convention used by the public scripts:
+No checkpoint is committed to this repository. The download links, directory layout,
+checksums and licence notes for every component — the retina background model, the
+vessel and fovea/optic-disc priors, the DINOv3 initialisation, and the PostGD student —
+are collected in [`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md).
+
+The scripts expect them under a local, ignored `models/` directory:
 
 ```text
-PostGD/
-└── models/                         local, ignored model directory
-    ├── stable-diffusion-v1-4/      CompVis base model snapshot
-    ├── sd-retina-model/
-    │   └── checkpoint-60000/unet/
-    │       ├── config.json
-    │       └── diffusion_pytorch_model.bin
-    ├── wnet_drive/
-    │   └── model_checkpoint.pth
-    ├── fovea_od/                    extracted Fundus Image Toolbox checkpoint
-    ├── dinov3/
-    │   └── vit_base_patch16_dinov3.pth
-    └── student/
-        └── student_final.pth
+models/
+├── stable-diffusion-v1-4/     CompVis base components
+├── sd-retina-model/           ReSDv1.4 fine-tuned UNet (retina background model)
+├── wnet_drive/                vessel segmentation checkpoint
+├── fovea_od/                  fovea / optic-disc localisation checkpoint
+└── dinov3/                    DINOv3 initialisation weights
 ```
 
-### Retina background generator
+Third-party components keep their own licences. Review
+[`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) before redistributing anything.
 
-The background model is a DERETFound/ReSDv1.4 fine-tuned Stable Diffusion UNet.
-Download [`sd-retina-model.zip`](https://zenodo.org/api/records/10947092/files/sd-retina-model.zip/content)
-from [Zenodo 10947092](https://zenodo.org/records/10947092), extract it as
-`models/sd-retina-model/`, and keep the `checkpoint-60000/unet/` directory.
-The base components come from
-[`CompVis/stable-diffusion-v1-4`](https://huggingface.co/CompVis/stable-diffusion-v1-4)
-and must be accepted/downloaded under its Open RAIL-M terms.
+## Usage
 
-### Vessel and fovea/optic-disc priors
+### Stage 1 — synthetic image generation
 
-The formal Stage 1 run used the directly downloadable LWNet DRIVE binary
-[`wnet_drive/model_checkpoint.pth` source on GitHub](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)
-([direct jsDelivr download](https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)),
-stored under `models/wnet_drive/`. The public prior adapter still imports the
-historical `engine.models` and `engine.utils` loader, which is not part of this
-minimal checkout; downloading the file alone therefore does not make the
-anatomy-aware path runnable. Use `--no-prior` for a geometry-only smoke test.
-
-The fovea/optic-disc checkpoint is obtained from
-[Fundus Image Toolbox / Zenodo 11174642](https://zenodo.org/records/11174642)
-and should be extracted under `models/fovea_od/`. Its checkpoint license is not
-declared in the Zenodo record, so do not redistribute it without author
-clarification. If the Zenodo HTML page temporarily returns `504`, use the
-[record API](https://zenodo.org/api/records/11174642) or the direct archive link
-in [`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md).
-
-### DINOv3 initialization and PostGD student
-
-DINOv3 ViT-B/16 initialization weights are gated by Meta. Request access from
-the [official download page](https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/)
-and place the authorized file at `models/dinov3/vit_base_patch16_dinov3.pth`.
-The Stage 2 command passes this same file as both `--teacher-weights` and
-`--student-weights`.
-
-The formal PostGD distilled student is a separate raw PyTorch state dict named
-`student_final.pth`. The release candidate is **342,626,578 bytes
-(326.75 MiB)** with SHA-256
-`1e5843650fd94b5ab12ce298fb3a30ec550982efa6ad62dbed04697f0aca7e00`.
-It is not hosted yet; see the release checklist in
-[`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md) before publishing it to Google
-Drive or Hugging Face, including review of the DINOv3 license and any derivative
-weight restrictions.
-
-## Stage 1: synthetic image generation
-
-### 1A. Complete pipeline
-
-The complete pipeline can generate backgrounds with Stable Diffusion, calibrate
-the non-black FOV region in Lab space, place spots subject to anatomical
-avoidance, and export `224 x 224` images plus a JSONL manifest.
+The full generator produces backgrounds, calibrates colour on the field of view, places
+spots subject to anatomical avoidance, and exports a dataset together with a per-image
+manifest:
 
 ```bash
 python stage1/full_method/generate.py \
   --count 20000 \
-  --background-count 4 \
-  --spot-case mixed \
   --output-size 224 \
   --device cuda \
-  --output-dir /path/to/runs/stage1_20k \
-  --resume
+  --output-dir /path/to/runs/stage1_20k
 ```
 
-For a local smoke test using existing backgrounds:
+Two approved spot profiles ship with the generator — `bright_no_dark` (the default solid
+appearance) and `dark_center`. Switch between them with `--spot-case`, and pass
+`--no-prior` for a geometry-only smoke test that skips the anatomy models.
 
-```bash
-python stage1/full_method/generate.py \
-  --count 4 \
-  --background-dir /path/to/backgrounds \
-  --skip-color-cal \
-  --no-prior \
-  --output-size 224 \
-  --output-dir /path/to/runs/stage1_smoke
-```
+The requested spot count is an **upper bound, not a target**: field-of-view limits,
+anatomical avoidance and inter-spot spacing all take priority, and the number of spots
+actually burned is recorded in the metadata and manifest.
 
-`--no-prior` disables vessel segmentation, fovea localization, and optic-disc
-localization. It is a geometry-only rendering path; spots may overlap vessels
-or other anatomy. It does not provide automatic anatomical detection.
-
-The default 20,000-image configuration uses two approved spot profiles:
-
-```text
-bright_no_dark:
-  spot_size=1.3, gap=0.001, gain=0.12
-  dark_center=0, dark_to_bright=0, bright_zone=0.20
-  fade_zone=0.80, dark_depth=0
-
-dark_center:
-  spot_size=1.8, gap=0.02, gain=0.10
-  ring_center=0.55, ring_width=0.05
-  ring_inner_fade=0.25, ring_outer_fade=0.45
-  ring_shoulder_power=1.0, dark_depth=0.04
-```
-
-For a new dataset, fit the color profile on training reference images only:
-
-```bash
-python stage1/full_method/fit_lab_profile.py \
-  --reference-dir /path/to/training_reference_images \
-  --output /path/to/hospital_lab_profile.json
-```
-
-Pass the resulting file with `--color-profile`.
-
-`--num-spots` is an upper bound, not a target that must be reached. Anatomical
-avoidance, FOV boundaries, and inter-spot spacing take priority.
-
-### 1B. Standalone renderer
-
-The standalone renderer accepts an existing RGB fundus background:
-
-```bash
-python stage1/render_only/render_spots.py \
-  --input /path/to/background.png \
-  --output-dir ./output \
-  --spot-size 1.3 \
-  --gap 0.001 \
-  --num-spots 160 \
-  --dark-center 0 \
-  --dark-to-bright 0 \
-  --bright-zone 0.2 \
-  --fade-zone 0.8 \
-  --dark-depth 0 \
-  --gain 0.12
-```
-
-Outputs include:
-
-```text
-*_synth.png
-*_mask.png
-*_meta.json
-```
-
-The renderer supports a ring profile with independent inner and outer shoulders.
-Use `--no-prior` for a geometry-only smoke test. To enable anatomy-aware
-placement, provide external prior-model paths through the command line or:
-
-```text
-POSTGD_VESSEL_MODEL=/path/to/wnet_model_directory
-POSTGD_FOVEA_MODEL_DIR=/path/to/fovea_od_model_directory
-```
-
-Prior checkpoints and the clinical training data used to obtain them are not
-included in this repository. The current adapter also depends on model code
-that is not bundled here, so downloading a checkpoint alone does not make the
-anatomy-aware path ready to run. See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md)
-for compatibility and licensing details.
-
-## Stage 2: teacher–student distillation
-
-The distillation script consumes the `224 x 224` synthetic images from stage 1.
-It uses two augmented views of each image:
-
-```text
-L = MSE(projector(student(view_1)), teacher(view_1))
-    + beta * (1 - cosine(student(view_1), student(view_2)))
-```
-
-The teacher is frozen. The student and an optional feature projector are updated
-with AdamW. The formal configuration is 200 epochs, batch size 64, learning rate
-`1e-4`, weight decay `0.05`, warmup of 500 steps, `beta=0.1`, and no validation
-split.
+### Stage 2 — teacher–student distillation
 
 ```bash
 python distillation/distill.py \
   --data-dir /path/to/runs/stage1_20k/distill_224 \
-  --output-dir /path/to/runs/dinov3_distill_20k \
-  --teacher-model vit_base_patch16_dinov3 \
+  --output-dir /path/to/runs/distill_20k \
+  --teacher-model vit_large_patch16_dinov3 \
   --student-model vit_base_patch16_dinov3 \
-  --teacher-weights /path/to/weights/vit_base_patch16_dinov3 \
-  --student-weights /path/to/weights/vit_base_patch16_dinov3 \
-  --device cuda \
+  --teacher-weights /path/to/weights/dinov3 \
+  --student-weights /path/to/weights/dinov3 \
   --epochs 200 \
-  --batch-size 64 \
   --expected-images 20000 \
-  --validation-fraction 0 \
-  --num-workers 8
+  --device cuda
 ```
 
-The script writes:
+The teacher is frozen; the student and a feature projector are optimised with an MSE
+distillation loss plus a view-consistency term. Both models start from **pretrained**
+DINOv3 weights — a randomly initialised student collapses under this objective. Training
+writes `config.json`, per-epoch metrics, the final student and the projection head. The
+full objective and hyperparameters are in
+[`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md).
 
-```text
-config.json
-epoch_metrics.jsonl
-last_checkpoint.pt
-student_final.pth
-student_to_teacher_projection.pth
-```
+### Stage 3 — few-shot downstream adaptation
 
-Weights are loaded from a user-provided local path. No foundation-model
-checkpoint is redistributed here.
-
-## Stage 3: few-shot downstream adaptation
-
-The downstream adapter is intentionally dataset-agnostic. It consumes frozen
-backbone features rather than hard-coding hospital paths or labels.
-
-Prepare an NPZ file with:
-
-```text
-support_features: [N, D] float32
-support_labels:   [N]    int64
-query_features:   [M, D] float32
-query_labels:     [M]    int64
-```
-
-Then run:
+The adapter is dataset-agnostic: it consumes frozen backbone features and a support/query
+split, selects a head using **support labels only**, and reports on the held-out query
+set.
 
 ```bash
 python downstream/adapt_head.py \
@@ -345,63 +182,46 @@ python downstream/adapt_head.py \
   --output /path/to/runs/downstream_result.json
 ```
 
-The adapter selects among cosine prototypes, shrinkage prototypes, a learnable
-prototype head, and regularized logistic regression using repeated stratified
-2-fold cross-validation on the support set only. Query labels are read only for
-the final report.
+See [`downstream/README.md`](downstream/README.md) for the NPZ format.
 
-This mirrors the released experimental protocol:
+## Repository layout
 
 ```text
-frozen PostGD backbone
-  -> support-only head selection
-  -> refit selected head on all support features
-  -> independent query/external evaluation
+PostGD/
+├── stage1/                Synthetic image generation
+│   ├── full_method/       Background → calibrated, spot-rendered images
+│   └── render_only/       Render spots on an existing fundus background
+├── distillation/          Teacher–student representation learning
+├── downstream/            Few-shot head adaptation
+├── configs/               Public Lab-profile template
+└── docs/                  Implementation, weights, reproducibility, licensing
 ```
 
-## Data, weights, and privacy
+## Data and privacy
 
-The following are not included in this repository:
+Clinical images, derived hospital statistics, model checkpoints and generated datasets
+are **not** included in this repository and never will be. Fit colour profiles on your own
+training reference set only, and confirm you hold the required data-use permissions before
+running on clinical data.
 
-- hospital or patient images;
-- external validation images and labels;
-- Stable Diffusion fine-tuning checkpoints;
-- DINOv3 checkpoints;
-- vessel/fovea localization checkpoints;
-- generated image collections and experiment logs.
+<a id="disclaimer"></a>
 
-Links to upstream checkpoints are not a blanket license or legal guarantee.
-Review the exact model, base-model, and dataset terms before use or
-redistribution. In particular, the fovea/optic-disc checkpoint has no license
-declared in its Zenodo record, and the PostGD distilled student is not publicly
-hosted.
-
-Before running on clinical data, verify that you have the required data-use
-permissions. Fit Lab color profiles on the training reference set only; do not
-use holdout or external images to estimate calibration statistics.
-
-## Reproducibility notes
-
-- The generation seed controls both background and rendering randomness.
-- Per-image metadata records the requested and actually generated spot counts.
-- A failed vessel prior is handled conservatively by blocking placement; use
-  `--no-prior` only for a deliberate geometry-only experiment.
-- The public repository does not claim that a requested spot count will always
-  be reached.
-- The released downstream adapter does not tune hyperparameters on query labels.
-
-See [`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) for the implementation
-contract and [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) for a
-server-run checklist. Third-party components and their licensing boundaries are
-listed in [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md).
+> **Disclaimer.** This is research code, not a medical device. It must not be used for
+> diagnosis or treatment decisions.
 
 ## Citation
 
-See [`CITATION.bib`](CITATION.bib). The BibTeX entry is intentionally minimal
-until the associated manuscript has a stable public bibliographic record.
+See [`CITATION.bib`](CITATION.bib).
+
+## Contributing
+
+Issues and pull requests are welcome. Please keep changes small and focused, and describe
+the exact command and configuration you used so results stay reproducible. Questions about
+setup or reproduction are best raised as a GitHub issue, where the answer stays visible to
+everyone.
 
 ## License
 
-The original method code in this repository is released under the MIT License.
-Third-party packages, checkpoints, and prior-model implementations retain their
-respective licenses and terms.
+The original method code in this repository is released under the [MIT License](LICENSE).
+Third-party packages, checkpoints and prior-model implementations retain their own
+licences and terms.

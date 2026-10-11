@@ -43,6 +43,22 @@ default appearance of both entry points: `stage1/full_method/generate.py`
 (`--spot-case bright_no_dark`) and the standalone `render_spots.py` CLI, whose
 profile defaults are solid for the same reason.
 
+Two approved spot profiles ship with the generator. `generate.py` selects one
+with `--spot-case`:
+
+```text
+bright_no_dark:
+  spot_size=1.3, gap=0.001, gain=0.12
+  dark_center=0, dark_to_bright=0, bright_zone=0.20
+  fade_zone=0.80, dark_depth=0
+
+dark_center:
+  spot_size=1.8, gap=0.02, gain=0.10
+  ring_center=0.55, ring_width=0.05
+  ring_inner_fade=0.25, ring_outer_fade=0.45
+  ring_shoulder_power=1.0, dark_depth=0.04
+```
+
 Spot brightness follows `region * (1 + gain * m * warm)`, where `m` is the
 radial profile and `warm` is a per-channel tint. `warm` defaults to the orange
 `(1.80, 0.85, 0.40)` validated against real post-operative fundus images; a
