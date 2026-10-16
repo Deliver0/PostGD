@@ -54,7 +54,7 @@ flowchart LR
 |-------|---------|-------------|
 | **1 — Generation** | Render PRP laser spots onto retinal backgrounds | [`stage1/`](stage1/) |
 | **2 — Distillation** | Adapt a DINOv3 backbone to the synthetic domain | [`distillation/distill.py`](distillation/distill.py) |
-| **3 — Adaptation** | Fit a light head on a few labelled images | [`downstream/adapt_head.py`](downstream/adapt_head.py) |
+| **3 — Adaptation** | Fit a light head on a few labelled images | [`downstream/adapt_head.py`](downstream/adapt_head.py), [`downstream/segmentation/few_shot_segmentation.py`](downstream/segmentation/few_shot_segmentation.py) |
 
 More synthetic results from Stage 1:
 
@@ -89,7 +89,7 @@ anatomy-aware path, point the renderer at the prior models first — see
 | **Approved appearance profiles** | Solid and ring-shaped burn profiles ship with the generator; the default matches real post-operative fundus images. |
 | **Reproducible by construction** | Every generated image carries a metadata record of the requested and actual spot count. |
 | **Compact distilled student** | The adapted backbone is a ViT-B/16, small enough to fine-tune with a few labelled images. |
-| **Leak-free evaluation** | The downstream adapter selects its head on support data only; query labels are read after the model is locked. |
+| **Leak-free evaluation** | Both downstream adapters select their head on support data only; query labels are read after the model is locked. |
 
 ## Installation
 
@@ -102,6 +102,8 @@ select the matching wheel from the official PyTorch index for your machine.
 | Stage 1 — standalone renderer | `stage1/render_only/requirements.txt` |
 | Stage 1 — full generator | `stage1/full_method/requirements.txt` |
 | Stage 2 — distillation | `distillation/requirements.txt` |
+| Stage 3 — classification head | `distillation/requirements.txt` |
+| Stage 3 — segmentation head | `downstream/segmentation/requirements.txt` |
 
 ## Pretrained models
 
@@ -172,9 +174,11 @@ full objective and hyperparameters are in
 
 ### Stage 3 — few-shot downstream adaptation
 
-The adapter is dataset-agnostic: it consumes frozen backbone features and a support/query
-split, selects a head using **support labels only**, and reports on the held-out query
-set.
+The adapters are dataset-agnostic: they consume frozen backbone features and a
+support/query split, select a head using **support labels only**, and report on the
+held-out query set.
+
+Classification head:
 
 ```bash
 python downstream/adapt_head.py \
@@ -184,6 +188,27 @@ python downstream/adapt_head.py \
 
 See [`downstream/README.md`](downstream/README.md) for the NPZ format.
 
+Segmentation head — it reads images and masks from a JSON manifest, caches the frozen
+pyramid features once, and fits a small decoder:
+
+```bash
+python downstream/segmentation/few_shot_segmentation.py \
+  --manifest /path/to/dataset/manifest.json \
+  --student-weights /path/to/student_final.pth \
+  --backbone vit_base_patch16_dinov3 \
+  --image-size 1024 \
+  --output /path/to/runs/seg_result
+```
+
+For each task the decoder's epoch count and binarisation threshold are chosen by
+support-only leave-one-out cross-validation, and the query split is scored once,
+after the decoder is locked. Each run writes `summary.json` with the selected
+settings, the query metrics and a provenance block (backbone, student SHA-256,
+manifest SHA-256, every hyper-parameter, `torch`/`python` versions) plus
+`test_metrics.jsonl` for per-image audit. Checkpoints trained at a resolution other
+than 224 need `--model-kwargs '{"img_size": 1024}'`. Full details in
+[`downstream/segmentation/README.md`](downstream/segmentation/README.md).
+
 ## Repository layout
 
 ```text
@@ -192,7 +217,7 @@ PostGD/
 │   ├── full_method/       Background → calibrated, spot-rendered images
 │   └── render_only/       Render spots on an existing fundus background
 ├── distillation/          Teacher–student representation learning
-├── downstream/            Few-shot head adaptation
+├── downstream/            Few-shot head adaptation (classification + segmentation)
 ├── configs/               Public Lab-profile template
 └── docs/                  Implementation, weights, reproducibility, licensing
 ```

@@ -44,3 +44,6 @@ wandb/
 
 secrets/
 .env
+
+# local smoke-test output
+.smoke/

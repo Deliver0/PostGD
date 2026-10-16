@@ -78,3 +78,53 @@ final metrics
 ```
 
 Do not select a candidate, epoch, or threshold using query/external labels.
+
+### Classification head
+
+```bash
+python downstream/adapt_head.py \
+  --support-npz /path/to/support_and_query.npz \
+  --output ./runs/downstream_result.json
+```
+
+The result JSON keeps the candidate list, the selected entry, and the query metrics,
+so the search space is auditable after the fact.
+
+### Segmentation head
+
+```bash
+python downstream/segmentation/few_shot_segmentation.py \
+  --manifest /path/to/dataset/manifest.json \
+  --student-weights /path/to/student_final.pth \
+  --backbone vit_base_patch16_dinov3 \
+  --image-size 1024 \
+  --output ./runs/seg_result
+```
+
+`summary.json` in the output directory already records most of the checklist above:
+
+```text
+backbone, image size, model kwargs
+student SHA-256 (and the checkpoint dict key it was stripped from)
+manifest SHA-256
+epoch / threshold candidate lists
+support-only leave-one-out CV scores for every candidate
+selected epoch and threshold
+per-task query metrics, written per image in test_metrics.jsonl
+torch and python versions
+```
+
+Two protocol points matter when comparing runs:
+
+- The support-only search must never see a query label. The released implementation
+  runs exactly `len(support)` folds, each holding out one support image.
+- The mask must live on the same grid the decoder produces, which is 16x the backbone
+  token grid. `--preprocess-mode` (`stretch`, `center_crop` or `letterbox`) decides
+  how a non-square source is mapped, and the same mode is used for images and masks.
+
+Reproduce the unit tests with:
+
+```bash
+python -m pytest downstream/segmentation/tests -q
+```
+
