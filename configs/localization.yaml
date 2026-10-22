@@ -1,0 +1,96 @@
+# Template for the few-shot landmark localisation head.
+#
+#   python downstream/localization/few_shot_localization.py \
+#     --config configs/localization.yaml \
+#     --manifest /path/to/dataset/landmarks.json \
+#     --student-weights /path/to/student_final.pth \
+#     --output /path/to/runs/localization_result
+#
+# Every key below is optional and mirrors a command-line flag of the same name
+# (dashes replaced by underscores). A flag given on the command line wins over
+# the value in this file, so the template can stay generic. Paths that are not
+# listed here --manifest, --data-root, --student-weights, --output, --tasks --
+# have no sensible default and must be passed explicitly.
+#
+# The file is read with PyYAML. A `.json` file with the same keys is accepted
+# too, in which case no extra dependency is needed.
+
+# Schema version of this template. Bump it if a key is renamed or removed.
+version: 1
+
+# --- Backbone ---------------------------------------------------------------
+# timm model name. The released student is a DINOv3 ViT; use the same
+# architecture that produced the checkpoint, otherwise loading fails loudly.
+backbone: vit_base_patch16_dinov3
+
+# Extra keyword arguments forwarded to `timm.create_model`. Checkpoints that
+# were distilled at 1024 px need `img_size` here so the positional embedding is
+# resized consistently. This is a mapping, not a string.
+model_kwargs:
+  img_size: 1024
+
+# Leading tokens to drop before the patch grid is rebuilt: the class token plus
+# any register tokens. Leave null to read `model.num_prefix_tokens` from the
+# backbone, which is correct for every timm ViT and avoids a hand-counted guess.
+num_prefix_tokens: null
+
+# --- Input geometry ---------------------------------------------------------
+# Square input resolution. 224 is the classification-head resolution and the
+# fastest option; 1024 matches the segmentation head and Table III. Euclidean
+# distances are reported in pixels at this resolution.
+image_size: 1024
+
+# How a non-square fundus image is mapped onto the square input:
+#   stretch     - direct resize, aspect ratio is not preserved (default)
+#   center_crop - centred square crop, border annotations are clipped
+#   letterbox   - pad to the square, aspect ratio is preserved
+# Use the mode the backbone was distilled with; landmarks go through the same
+# geometry as the pixels.
+preprocess_mode: stretch
+
+# How annotations in the manifest are to be read:
+#   normalized - fractions of the source image, in [0, 1] (default)
+#   pixel      - absolute source pixels, divided by the image size first
+# Set null to take the value declared by the manifest itself.
+coord_space: null
+
+# --- Head -------------------------------------------------------------------
+# Width of the per-token projection inside the head. 128 keeps the head at a
+# few hundred thousand parameters, which is what "few-shot" can actually fit.
+hidden_dim: 128
+
+# --- Optimisation -----------------------------------------------------------
+# Candidate epoch counts. The winner is chosen by support-only leave-one-out
+# cross-validation; the list is fixed before the run and recorded in
+# summary.json, so the search space is part of the result.
+epochs: [10, 50, 100]
+
+# Extra augmented views per support image. Odd indices are horizontally
+# flipped together with their target, so the augmentation cannot move a
+# landmark. 0 disables augmentation and speeds up a smoke test.
+aug_repeats: 4
+
+# AdamW learning rate and weight decay for the head only; the backbone is
+# frozen and never receives a gradient.
+lr: 0.001
+weight_decay: 0.0001
+
+# Regression loss on normalised coordinates:
+#   smooth_l1 - Huber-style, robust to a badly annotated support point
+#   mse       - plain squared error, more sensitive to outliers
+loss_mode: smooth_l1
+
+# Transition point of smooth_l1, in normalised units (0.05 is roughly 51 px at
+# 1024 px input). Ignored by mse.
+beta: 0.05
+
+# L1 penalty on the head weights, added to the regression loss. 0 disables it;
+# small values (1e-4 .. 1e-3) regularise the head on 5 support images.
+l1_weight: 0.0
+
+# Seed for the augmentation RNG, the head initialisation and the fold order.
+seed: 42
+
+# --- Execution --------------------------------------------------------------
+# Torch device string, or null to use CUDA when it is available.
+device: null

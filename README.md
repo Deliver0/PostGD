@@ -209,6 +209,33 @@ manifest SHA-256, every hyper-parameter, `torch`/`python` versions) plus
 than 224 need `--model-kwargs '{"img_size": 1024}'`. Full details in
 [`downstream/segmentation/README.md`](downstream/segmentation/README.md).
 
+Landmark localisation head — it regresses normalised `(x, y)` coordinates from the
+same frozen token sequence and reports Euclidean distance in pixels at the input
+resolution, which is the quantity in Table III:
+
+```bash
+python downstream/localization/few_shot_localization.py \
+  --manifest /path/to/dataset/landmarks.json \
+  --student-weights /path/to/student_final.pth \
+  --backbone vit_base_patch16_dinov3 \
+  --image-size 1024 \
+  --output /path/to/runs/localization_result
+```
+
+The epoch count is again selected on support images only, with the query split
+scored once after the head is locked, and the same provenance block is written.
+`--image-size` defaults to `224`; pass `1024` to match the segmentation head and the
+paper. Defaults can be kept in a config file and overridden per run:
+
+```bash
+python downstream/localization/few_shot_localization.py \
+  --config configs/localization.yaml \
+  --manifest /path/to/dataset/landmarks.json \
+  --output /path/to/runs/localization_result
+```
+
+Full details in [`downstream/localization/README.md`](downstream/localization/README.md).
+
 ## Repository layout
 
 ```text
@@ -217,8 +244,9 @@ PostGD/
 │   ├── full_method/       Background → calibrated, spot-rendered images
 │   └── render_only/       Render spots on an existing fundus background
 ├── distillation/          Teacher–student representation learning
-├── downstream/            Few-shot head adaptation (classification + segmentation)
-├── configs/               Public Lab-profile template
+├── downstream/            Few-shot head adaptation (classification + segmentation
+│                          + landmark localisation)
+├── configs/               Public Lab-profile and localisation-head templates
 └── docs/                  Implementation, weights, reproducibility, licensing
 ```
 
