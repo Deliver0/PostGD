@@ -86,7 +86,7 @@ single direction (pairwise cosine ~0.99, effective rank 13/384), which then
 scores at chance on every downstream task.
 
 The default formal run uses 200,000 images, 200 epochs, global batch size 640,
-AdamW, learning rate `2e-4`, weight decay `0.05`, 500 warmup steps, cosine
+AdamW, learning rate `1e-4`, weight decay `0.05`, 500 warmup steps, cosine
 decay, layer-wise learning-rate decay `0.75`, an EMA copy of the student with
 `ema_decay=0.999`, and `beta=0.1`.
 

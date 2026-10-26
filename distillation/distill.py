@@ -18,7 +18,7 @@ scores at chance.
 
 ``lr`` is tied to ``SCHEDULER_REFERENCE_BATCH_SIZE`` (64) images: the formal run
 uses a global batch of 640 across 8 processes and steps the cosine schedule
-``global_batch // 64`` times per optimizer step, so ``lr=2e-4`` keeps the same
+``global_batch // 64`` times per optimizer step, so ``lr=1e-4`` keeps the same
 meaning at any world size.  Layer-wise learning-rate decay (BEiT/MAE convention)
 and an EMA copy of the student are both part of the formal recipe.
 
@@ -65,7 +65,7 @@ class DistillConfig:
     img_size: int = 224
     epochs: int = 200
     batch_size: int = 64
-    lr: float = 2e-4
+    lr: float = 1e-4
     weight_decay: float = 0.05
     warmup_steps: int = 500
     beta: float = 0.1
@@ -430,7 +430,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", "--batch_size", type=int, default=64,
                         help="images per optimizer step; lr is tied to "
                              f"{SCHEDULER_REFERENCE_BATCH_SIZE}")
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", "--weight_decay", type=float, default=0.05)
     parser.add_argument("--warmup-steps", "--warmup_steps", type=int, default=500)
     parser.add_argument("--beta", type=float, default=0.1)
