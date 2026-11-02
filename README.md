@@ -136,10 +136,10 @@ manifest:
 
 ```bash
 python stage1/full_method/generate.py \
-  --count 20000 \
+  --count 200000 \
   --output-size 224 \
   --device cuda \
-  --output-dir /path/to/runs/stage1_20k
+  --output-dir /path/to/runs/stage1_200k
 ```
 
 Two approved spot profiles ship with the generator — `bright_no_dark` (the default solid
@@ -154,14 +154,14 @@ actually burned is recorded in the metadata and manifest.
 
 ```bash
 python distillation/distill.py \
-  --data-dir /path/to/runs/stage1_20k/distill_224 \
-  --output-dir /path/to/runs/distill_20k \
+  --data-dir /path/to/runs/stage1_200k/distill_224 \
+  --output-dir /path/to/runs/distill_200k \
   --teacher-model vit_large_patch16_dinov3 \
   --student-model vit_base_patch16_dinov3 \
   --teacher-weights /path/to/weights/dinov3 \
   --student-weights /path/to/weights/dinov3 \
   --epochs 200 \
-  --expected-images 20000 \
+  --expected-images 200000 \
   --device cuda
 ```
 

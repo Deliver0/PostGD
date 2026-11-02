@@ -44,6 +44,6 @@ python generate.py \
   --output-dir ./smoke
 ```
 
-The full 20,000-image server configuration is documented in the repository root
+The full 200,000-image server configuration is documented in the repository root
 README. The output manifest records the seed, profile, requested spot upper
 bound, and actual generated spot count for each image.

@@ -85,7 +85,7 @@ fine-tuned UNet.
 
 ## 3. Vessel segmentation prior
 
-The formal 20k server run used the binary LWNet `wnet` checkpoint trained on
+The formal 200k server run used the binary LWNet `wnet` checkpoint trained on
 DRIVE. It is directly downloadable from the upstream repository:
 
 ```bash
@@ -179,8 +179,8 @@ student:
 
 ```bash
 python distillation/distill.py \
-  --data-dir "$POSTGD_ROOT/runs/stage1_20k" \
-  --output-dir "$POSTGD_ROOT/runs/dinov3_distill_20k" \
+  --data-dir "$POSTGD_ROOT/runs/stage1_200k" \
+  --output-dir "$POSTGD_ROOT/runs/dinov3_distill_200k" \
   --teacher-model vit_base_patch16_dinov3 \
   --student-model vit_base_patch16_dinov3 \
   --teacher-weights "$POSTGD_WEIGHTS/dinov3/vit_base_patch16_dinov3.pth" \
@@ -188,7 +188,7 @@ python distillation/distill.py \
   --no-pretrained \
   --epochs 200 \
   --batch-size 64 \
-  --expected-images 20000 \
+  --expected-images 200000 \
   --validation-fraction 0 \
   --seed 42
 ```
@@ -198,7 +198,7 @@ configuration and resumable checkpoint, to the output directory.
 
 ## 6. PostGD distilled student
 
-The formal candidate is the file produced by the 20k, 200-epoch run:
+The formal candidate is the file produced by the 200k, 200-epoch run:
 
 ```text
 student_final.pth
@@ -207,7 +207,7 @@ sha256: 1e5843650fd94b5ab12ce298fb3a30ec550982efa6ad62dbed04697f0aca7e00
 format: raw PyTorch state_dict() for vit_base_patch16_dinov3
 ```
 
-The recorded training configuration is `20,000` generated images, `200` epochs,
+The recorded training configuration is `200,000` generated images, `200` epochs,
 batch size `64`, learning rate `2e-4`, weight decay `0.05`, `500` warmup steps,
 `beta=0.1`, seed `42`, and `pretrained=true` for the DINOv3 initialization.
 
