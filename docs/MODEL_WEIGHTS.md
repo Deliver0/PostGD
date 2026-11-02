@@ -208,7 +208,7 @@ format: raw PyTorch state_dict() for vit_base_patch16_dinov3
 ```
 
 The recorded training configuration is `20,000` generated images, `200` epochs,
-batch size `64`, learning rate `1e-4`, weight decay `0.05`, `500` warmup steps,
+batch size `64`, learning rate `2e-4`, weight decay `0.05`, `500` warmup steps,
 `beta=0.1`, seed `42`, and `pretrained=true` for the DINOv3 initialization.
 
 The matching local/server candidate is not hosted yet. Keep it at
