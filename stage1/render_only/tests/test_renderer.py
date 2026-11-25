@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import random
 
+import pytest
 import numpy as np
 from PIL import Image
 
@@ -108,7 +109,7 @@ def test_dense_vessel_prediction_is_never_discarded(monkeypatch):
         prior_guidance, "_load_vessels", lambda image, cfg, device: (dense_vessels, "ok")
     )
     monkeypatch.setattr(
-        prior_guidance, "_load_fovea_od", lambda image, cfg, device: (None, "unavailable")
+        prior_guidance, "_load_fovea_od", lambda image, cfg, device: ((64.0, 64.0, 32.0, 64.0), "ok")
     )
     cfg = prior_guidance.PriorConfig(device="cpu", vessel_buffer_px=0, posterior_pole_radius=1)
 
@@ -126,22 +127,14 @@ def test_missing_vessel_prediction_blocks_all_spots(monkeypatch):
         prior_guidance, "_load_vessels", lambda image, cfg, device: (None, "checkpoint unavailable")
     )
     monkeypatch.setattr(
-        prior_guidance, "_load_fovea_od", lambda image, cfg, device: (None, "unavailable")
+        prior_guidance, "_load_fovea_od", lambda image, cfg, device: ((64.0, 64.0, 32.0, 64.0), "ok")
     )
-    prior = prior_guidance.build_prior(
-        Image.new("RGB", (128, 128)),
-        prior_guidance.PriorConfig(device="cpu"),
-        spot_radius=12,
-    )
-    points = plan_spots(
-        np.ones((128, 128), dtype=bool),
-        RenderConfig(num_spots=10, seed=1),
-        avoidance_mask=prior["avoidance_mask"],
-    )
-
-    assert prior["vessel_mask"] is None
-    assert prior["status"]["vessel"] == "checkpoint unavailable"
-    assert points == []
+    with pytest.raises(RuntimeError, match="vessel segmentation is unavailable"):
+        prior_guidance.build_prior(
+            Image.new("RGB", (128, 128)),
+            prior_guidance.PriorConfig(device="cpu"),
+            spot_radius=12,
+        )
 
 
 def _assert_rendered_spots_avoid_vessels():

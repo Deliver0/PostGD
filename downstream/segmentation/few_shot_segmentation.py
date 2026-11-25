@@ -1,10 +1,10 @@
 """Command line entry point for the released few-shot segmentation head.
 
 The runner is deliberately dataset agnostic. Give it a manifest (see
-``seg_head.load_manifest``), a frozen DINOv3 checkpoint and a task list, and it
+``seg_head.load_manifest``), a DINOv3 checkpoint and a task list, and it
 will, per task:
 
-1. extract backbone features for every image once and cache them in memory;
+1. use image-based partial adaptation for OD/OC, or frozen features for other tasks;
 2. select the decoder epoch and the decision threshold by **support-only**
    leave-one-out cross-validation;
 3. fit the final decoder on all support images;
@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Dict, List, Sequence
 
 import torch
+
+from partial_finetune import run_partial_task, task_finetune_blocks
 
 from seg_head import (  # noqa: E402
     DEFAULT_FEATURE_INDICES,
@@ -124,7 +126,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epoch-candidates", type=int, nargs="+", default=[10, 50, 100, 150])
     parser.add_argument("--threshold-candidates", type=float, nargs="+", default=[0.3, 0.5, 0.7, 0.9])
     parser.add_argument("--aug-repeats", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--backbone-lr", type=float, default=1e-5,
+                        help="learning rate for unfrozen transformer blocks")
+    parser.add_argument("--finetune-blocks", type=int, default=None,
+                        help="override final block count for every requested task; "
+                             "default OD=1, OC=2, other tasks=0 (frozen)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dice-weight", type=float, default=0.5)
     parser.add_argument("--loss-mode", choices=("foreground", "multiclass"), default="foreground")
@@ -189,6 +196,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "threshold_candidates": args.threshold_candidates,
         "aug_repeats": args.aug_repeats,
         "lr": args.lr,
+        "backbone_lr": args.backbone_lr,
+        "finetune_blocks_override": args.finetune_blocks,
         "seed": args.seed,
         "dice_weight": args.dice_weight,
         "loss_mode": args.loss_mode,
@@ -209,6 +218,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         test = [i for i in split.test if i in samples]
         if not support:
             raise SystemExit(f"Task {task}: no usable support images in the manifest.")
+
+        blocks = (task_finetune_blocks(task) if args.finetune_blocks is None
+                  else args.finetune_blocks)
+        if blocks < 0:
+            raise SystemExit("--finetune-blocks must be non-negative")
+        if blocks:
+            rows, task_summary = run_partial_task(
+                backbone, blocks, task, samples, support, test, args, device,
+            )
+            task_dir = args.output / task
+            (task_dir / "test_metrics.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8",
+            )
+            summary[task] = {**task_summary, "metrics": summarize(rows)}
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+            continue
 
         original, augmented = build_feature_sets(
             samples, task, support, extractor, args.aug_repeats, args.seed
@@ -275,6 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
         )
         summary[task] = {
+            "finetune_blocks": 0,
             "selected_epoch": best_epoch,
             "selected_threshold": best_threshold,
             "support_cv": {str(k): v for k, v in cv_scores.items()},

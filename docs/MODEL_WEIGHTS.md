@@ -29,6 +29,7 @@ models/
 │   └── 2024-05-07 11_13.05/
 │       └── multi_efficientnet-b3_best.pt
 ├── dinov3/
+│   ├── vit_large_patch16_dinov3.pth
 │   └── vit_base_patch16_dinov3.pth
 └── student/
     └── student_final.pth
@@ -112,12 +113,10 @@ Pass the **directory**, not the file, to the public adapter:
 --vessel-model "$POSTGD_WEIGHTS/wnet_drive"
 ```
 
-The adapter then looks for `model_checkpoint.pth` in that directory. It also
-imports `engine.models.get_model` and `engine.utils.model_saving_loading`; those
-historical modules are not included in this minimal public checkout. Thus the
-checkpoint is obtainable, but the download alone is not a complete runnable
-vessel prior for this release. A `--no-prior` run deliberately disables vessel,
-fovea, and optic-disc avoidance and may place spots over vessels.
+The adapter looks for `model_checkpoint.pth` in that directory and loads it
+through the self-contained `src/wnet_vessel.py` implementation. The historical
+`engine.models` and `engine.utils` modules are not required. A `--no-prior`
+PRP run disables vessel, fovea and optic-disc avoidance.
 
 The historical GUI used separate `big_wnet` DRIVE/HRF A/V checkpoints. They are
 not substitutes for the formal `wnet_drive` file.
@@ -163,7 +162,8 @@ repository is MIT, but that does not clear redistribution of the weights.
 
 ## 5. DINOv3 initialization
 
-The distillation script creates `vit_base_patch16_dinov3` through `timm` and
+The distillation script creates a `vit_large_patch16_dinov3` teacher and a
+`vit_base_patch16_dinov3` student through `timm` and
 loads a user-provided local checkpoint. DINOv3 files are gated by Meta; request
 access and accept the [DINOv3 license](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md)
 before downloading.
@@ -171,19 +171,35 @@ before downloading.
 Save the authorized checkpoint as:
 
 ```text
+models/dinov3/vit_large_patch16_dinov3.pth
 models/dinov3/vit_base_patch16_dinov3.pth
 ```
 
-For the formal configuration, use the same initialization file for teacher and
-student:
+Use state dicts compatible with the requested timm architectures. When using
+timm's pretrained download, accept the upstream model terms first, then export
+each architecture separately:
+
+```python
+import timm
+import torch
+
+for size in ("large", "base"):
+    name = f"vit_{size}_patch16_dinov3"
+    model = timm.create_model(name, pretrained=True, num_classes=0)
+    torch.save(model.state_dict(), f"models/dinov3/{name}.pth")
+```
+
+Use separate initialization files matching the teacher and student architectures.
+The example below uses the public single-process batch size of 64. It does not
+reproduce the 640-image multi-GPU batch specified in the response:
 
 ```bash
 python distillation/distill.py \
-  --data-dir "$POSTGD_ROOT/runs/stage1_200k" \
+  --data-dir "$POSTGD_ROOT/runs/stage1_200k/distill_224" \
   --output-dir "$POSTGD_ROOT/runs/dinov3_distill_200k" \
-  --teacher-model vit_base_patch16_dinov3 \
+  --teacher-model vit_large_patch16_dinov3 \
   --student-model vit_base_patch16_dinov3 \
-  --teacher-weights "$POSTGD_WEIGHTS/dinov3/vit_base_patch16_dinov3.pth" \
+  --teacher-weights "$POSTGD_WEIGHTS/dinov3/vit_large_patch16_dinov3.pth" \
   --student-weights "$POSTGD_WEIGHTS/dinov3/vit_base_patch16_dinov3.pth" \
   --no-pretrained \
   --epochs 200 \
@@ -198,7 +214,8 @@ configuration and resumable checkpoint, to the output directory.
 
 ## 6. PostGD distilled student
 
-The formal candidate is the file produced by the 200k, 200-epoch run:
+The following is a previously recorded local candidate, not a publicly hosted
+release or a verified checkpoint for the paper-aligned code changes:
 
 ```text
 student_final.pth

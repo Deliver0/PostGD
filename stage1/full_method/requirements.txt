@@ -9,5 +9,5 @@ fundus-image-toolbox>=0.1.0
 diffusers<0.21
 transformers==4.35.2
 accelerate>=0.25
-huggingface_hub>=0.20
+huggingface_hub>=0.23,<0.26
 

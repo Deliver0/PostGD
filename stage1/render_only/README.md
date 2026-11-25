@@ -23,3 +23,20 @@ Anatomy-aware placement is enabled by default when the caller provides external
 prior checkpoints. A missing vessel prediction blocks placement rather than
 silently allowing a spot to cover a vessel.
 
+## GRID mode
+
+PRP is the default. Use `--treatment grid` to place spots inside the
+fovea-centred posterior region, avoiding vessels and the optic disc:
+
+```bash
+python stage1/render_only/render_spots.py \
+  --input /path/to/background.png --output-dir ./output/grid \
+  --treatment grid --vessel-model ./models/wnet_drive \
+  --fovea-model-dir /path/to/fovea_od/checkpoint-directory
+```
+
+Run this example from the repository root. GRID requires anatomical priors;
+`--no-prior` is not supported for this mode. The metadata records the treatment
+and foveal placement centre. Both modes constrain spot centres; use
+`--avoidance-footprint-scale` for additional footprint clearance.
+

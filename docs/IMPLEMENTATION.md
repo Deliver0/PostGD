@@ -11,17 +11,23 @@ The complete generator is `stage1/full_method/generate.py`. Its order is:
 1. obtain a background from Stable Diffusion or `--background-dir`;
 2. apply a Lab profile to the non-black FOV;
 3. build optional vessel, optic-disc, fovea, and posterior-pole priors;
-4. place spots on concentric rings around the posterior pole;
+4. place PRP spots on concentric rings around the optic disc;
 5. render an irregular footprint with a continuous radial intensity profile;
 6. crop the FOV to a centred circle and resize to the distillation input size;
 7. save the final image, masks, metadata, and manifest.
+
+`--treatment prp` is the default. `--treatment grid` instead uses the foveal
+centre, allows placement inside the posterior region, and excludes the vessels
+and optic disc. GRID disables the PRP inner exclusion and stops walking rings
+at the posterior radius. Both modes require centres inside the retinal FOV.
+GRID requires anatomical priors; `--no-prior` selects a PRP geometry-only run.
 
 Placement is a radial PRP walk, not uniform sampling. Ring radii are authored at
 the 518x395 clinical planning size (`reference_base_radius=55`,
 `reference_ring_step=20`, `rings=10`) and rescaled to the working resolution, so
 the layout is identical at 512x512 and at a native 2300x1830 fundus. The walk
-starts outside the posterior-pole exclusion, which is centred on the optic disc
-following the ETDRS convention, and alternates a half-slot angular offset
+uses the optic disc as its ring centre and excludes the fovea-centred
+posterior-pole region. It alternates a half-slot angular offset
 between neighbouring rings. Every centre is jittered by up to `angular_jitter`
 radians and `radial_jitter` ring steps.
 
@@ -85,7 +91,7 @@ images and no natural-image pretraining the student features collapse onto a
 single direction (pairwise cosine ~0.99, effective rank 13/384), which then
 scores at chance on every downstream task.
 
-The default formal run uses 200,000 images, 200 epochs, global batch size 640,
+The public single-process defaults use 200,000 images, 200 epochs, batch size 64,
 AdamW, learning rate `2e-4`, weight decay `0.05`, 500 warmup steps, cosine
 decay, layer-wise learning-rate decay `0.75`, an EMA copy of the student with
 `ema_decay=0.999`, and `beta=0.1`.
@@ -99,10 +105,13 @@ the candidate is locked and are never used for model selection.
 The public script includes:
 
 - raw cosine prototypes;
-- weak-augmentation or view-averaged prototypes when supplied;
 - shrinkage prototypes;
-- a learnable prototype head;
 - L2-normalized logistic regression.
+
+The paper configuration in the response specifies a global batch of 640.
+The released runner has no distributed launcher; it does not reproduce that
+multi-GPU configuration. Other implementation gaps are tracked in
+[`PAPER_ALIGNMENT.md`](PAPER_ALIGNMENT.md).
 
 ## External prerequisites
 

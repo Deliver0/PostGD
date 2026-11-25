@@ -169,8 +169,13 @@ class RenderConfig:
     # far fewer burns, so 0.0 keeps the formal Stage 1 layout.
     avoidance_footprint_scale: float = 0.0
     save_prior_masks: bool = True
+    treatment: str = "prp"
 
     def validate(self) -> None:
+        if self.treatment not in {"prp", "grid"}:
+            raise ValueError("treatment must be prp or grid")
+        if self.treatment == "grid" and self.no_prior:
+            raise ValueError("GRID requires anatomical priors; do not use --no-prior")
         if self.num_spots < 0:
             raise ValueError("num_spots must be >= 0")
         if self.spot_size <= 0 or self.gap < 0 or self.gap_abs < 0 or self.gain < 0:
@@ -229,7 +234,10 @@ REFERENCE_SIZE = (518.0, 395.0)
 
 def plan_spots(fov_mask: np.ndarray, config: RenderConfig, *, center: Optional[tuple[float, float]] = None,
                avoidance_mask: Optional[np.ndarray] = None) -> list[tuple[float, float, float]]:
-    """Place spots on concentric rings around the posterior pole.
+    """Place PRP or GRID spots on anatomically constrained concentric rings.
+
+    GRID uses the supplied foveal centre and an avoidance mask that excludes
+    everything outside the posterior region. It disables the PRP inner exclusion.
 
     The historical renderer did not sample the FOV uniformly.  It walked rings
     outwards from the posterior pole -- the optic-disc centre, following the
@@ -245,6 +253,8 @@ def plan_spots(fov_mask: np.ndarray, config: RenderConfig, *, center: Optional[t
     distance to an already accepted spot.
     """
     config.validate()
+    if config.treatment == "grid" and (center is None or avoidance_mask is None):
+        raise ValueError("GRID requires a foveal center and an anatomical avoidance mask")
     h, w = fov_mask.shape
     cx, cy, fov_radius = _fov_geometry(fov_mask)
     if center is not None:
@@ -262,6 +272,8 @@ def plan_spots(fov_mask: np.ndarray, config: RenderConfig, *, center: Optional[t
     min_distance = max(ring_gap * 0.85, spot_diameter * 0.92)
     exclusion_radius = max(float(config.posterior_pole_radius) * scale,
                            float(config.central_exclusion) * fov_radius)
+    if config.treatment == "grid":
+        exclusion_radius = 0.0
     base_radius = float(config.reference_base_radius) * scale
     ring_step = float(config.reference_ring_step) * scale
 
@@ -292,6 +304,9 @@ def plan_spots(fov_mask: np.ndarray, config: RenderConfig, *, center: Optional[t
 
     for ring_index in range(n_rings):
         ring_radius = base_radius + (ring_index + 1) * ring_step
+        if (config.treatment == "grid" and
+                ring_radius - ring_step * config.radial_jitter > config.posterior_pole_radius * scale):
+            break
         circumference = 2.0 * math.pi * ring_radius
         slots = max(6, int(circumference / max(ring_gap, 1e-6)))
         slots = min(slots, int(config.max_spots_per_ring))
@@ -388,6 +403,7 @@ def render_background(input_path: str | Path, output_dir: str | Path, config: Op
         image,
         PriorConfig(
             enabled=not config.no_prior,
+            treatment=config.treatment,
             device=config.device,
             vessel_model=config.vessel_model,
             fovea_model_dir=config.fovea_model_dir,
@@ -425,6 +441,7 @@ def render_background(input_path: str | Path, output_dir: str | Path, config: Op
             "config": {k: v for k, v in asdict(config).items() if k != "profile"},
             "outputs": {"image": str(rendered_path), "mask": str(mask_path)},
             "prior_guided": bool(not config.no_prior),
+            "treatment": config.treatment,
             "prior": {"status": prior.get("status", {}), "center": prior.get("center"),
                       "fovea": prior.get("fovea"), "optic_disc": prior.get("optic_disc"),
                       "parameters": prior.get("parameters", {})}}

@@ -16,11 +16,11 @@ natural-image pretraining the student embeddings fall onto a single direction
 (pairwise cosine ~0.99, effective rank 13/384) and every downstream task then
 scores at chance.
 
-``lr`` is tied to ``SCHEDULER_REFERENCE_BATCH_SIZE`` (64) images: the formal run
-uses a global batch of 640 across 8 processes and steps the cosine schedule
-``global_batch // 64`` times per optimizer step, so ``lr=2e-4`` keeps the same
-meaning at any world size.  Layer-wise learning-rate decay (BEiT/MAE convention)
-and an EMA copy of the student are both part of the formal recipe.
+The response describes a global batch of 640 across eight GPUs. This public
+runner is single-process and defaults to batch size 64. It advances the schedule
+``max(1, batch_size // 64)`` times per optimizer step. Distributed training and
+schedule equivalence have not been verified. Layer-wise learning-rate decay
+(BEiT/MAE convention) and an EMA copy of the student are implemented.
 
 Models are loaded through timm so the local ``vit_base_patch16_dinov3`` weights
 can be used without torch-hub's DINOv2 fallback.
@@ -176,6 +176,12 @@ def _load_weights(model: nn.Module, path: Optional[str]) -> nn.Module:
         for key, value in state.items()
     }
     missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        raise ValueError(
+            f"checkpoint does not match {type(model).__name__}: "
+            f"missing {len(missing)} model entries ({missing[:3]}). "
+            "Use weights exported for the requested timm architecture."
+        )
     print(
         f"[Distill] loaded {weight_path}; "
         f"missing={len(missing)} unexpected={len(unexpected)}"
@@ -359,11 +365,11 @@ def train_one_epoch(student, teacher, projector, loader, optimizer, scheduler,
         view2 = view2.to(cfg.device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with _autocast(cfg.device):
-            student_first = projector(extract_feature(student, view1))
-            student_second = projector(extract_feature(student, view2))
+            student_first = extract_feature(student, view1)
+            student_second = extract_feature(student, view2)
             with torch.no_grad():
                 teacher_feature = extract_feature(teacher, view1)
-            loss_kd = kd_loss(student_first, teacher_feature)
+            loss_kd = kd_loss(projector(student_first), teacher_feature)
             loss_cons = consistency_loss(student_first, student_second)
             loss = loss_kd + cfg.beta * loss_cons
         if scaler is not None:

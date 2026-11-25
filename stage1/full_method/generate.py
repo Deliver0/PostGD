@@ -114,6 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-base-fallback", action="store_true")
     p.add_argument("--allow-download", action="store_true")
 
+    p.add_argument("--treatment", choices=["prp", "grid"], default="prp")
     p.add_argument("--spot-case", choices=["bright_no_dark", "dark_center", "mixed"],
                    default="bright_no_dark",
                    help="approved appearance preset; mixed alternates the two cases")
@@ -342,8 +343,11 @@ def _calibrate_backgrounds(args, backgrounds: list[Path],
     return result
 
 
-def apply_fov_hard_mask(image: Image.Image, target_size: int = 224) -> Image.Image:
-    """Crop the non-black FOV to a square, apply a circular mask, then resize."""
+def export_fov_pair(image: Image.Image, target_size: int = 224,
+                    laser_mask: Optional[Image.Image] = None):
+    """Apply identical FOV geometry to image and label; resize labels with nearest."""
+    if laser_mask is not None and laser_mask.size != image.size:
+        raise ValueError("laser mask and image must have the same size")
     rgb = image.convert("RGB")
     gray = np.asarray(rgb.convert("L"))
     ys, xs = np.where(gray > 30)
@@ -364,7 +368,18 @@ def apply_fov_hard_mask(image: Image.Image, target_size: int = 224) -> Image.Ima
     ImageDraw.Draw(mask).ellipse((0, 0, square_size - 1, square_size - 1), fill=255)
     masked = Image.new("RGB", crop.size, (0, 0, 0))
     masked.paste(crop, (0, 0), mask)
-    return masked.resize((int(target_size), int(target_size)), Image.Resampling.LANCZOS)
+    final = masked.resize((int(target_size), int(target_size)), Image.Resampling.LANCZOS)
+    final_label = None
+    if laser_mask is not None:
+        label_crop = laser_mask.convert("L").crop((left, top, left + square_size, top + square_size))
+        label = Image.new("L", crop.size, 0)
+        label.paste(label_crop, (0, 0), mask)
+        final_label = label.resize((int(target_size), int(target_size)), Image.Resampling.NEAREST)
+    return final, final_label
+
+
+def apply_fov_hard_mask(image: Image.Image, target_size: int = 224) -> Image.Image:
+    return export_fov_pair(image, target_size)[0]
 
 
 def _case_for_index(case_name: str, index: int) -> str:
@@ -433,6 +448,7 @@ def _render_config(args, index: int) -> tuple[str, RenderConfig]:
         reference_ring_step=float(values.get("reference_ring_step", 20.0)),
         max_spots_per_ring=int(values.get("max_spots_per_ring", 50)),
         profile=ZoneProfile(**profile_values),
+        treatment=args.treatment,
         no_prior=bool(args.no_prior),
         device=args.device,
         vessel_model=args.vessel_model,
@@ -455,12 +471,15 @@ def _write_manifest_line(handle, index: int, background: Path, final_path: Path,
         "output": str(final_path),
         "background": str(background),
         "case": case_name,
+        "treatment": config.treatment,
         "seed": config.seed,
         "spot_size": config.spot_size,
         "gap": config.gap,
         "gain": config.gain,
         "requested_spots": config.num_spots,
         "generated_spots": render_meta.get("generated_spots"),
+        "mask": render_meta.get("mask"),
+        "metadata": render_meta.get("metadata"),
         "profile": vars(config.profile),
         "prior_guided": not config.no_prior,
         "output_size": [int(output_size), int(output_size)],
@@ -471,11 +490,11 @@ def _render_with_cached_prior(
     background: Path,
     config: RenderConfig,
     args,
-    cache: dict[str, tuple[Image.Image, np.ndarray, dict]],
+    cache: dict[tuple[str, str], tuple[Image.Image, np.ndarray, dict]],
     output_dir: Path,
-) -> tuple[Image.Image, dict]:
+) -> tuple[Image.Image, Image.Image, dict]:
     """Render one image while reusing the anatomical prior for a background."""
-    key = str(background.resolve())
+    key = (str(background.resolve()), config.treatment)
     if key not in cache:
         with Image.open(background) as source:
             image = source.convert("RGB")
@@ -484,6 +503,7 @@ def _render_with_cached_prior(
             image,
             PriorConfig(
                 enabled=not config.no_prior,
+                treatment=config.treatment,
                 device=config.device,
                 vessel_model=config.vessel_model,
                 fovea_model_dir=config.fovea_model_dir,
@@ -498,7 +518,7 @@ def _render_with_cached_prior(
         if config.save_prior_masks:
             prior_dir = output_dir / "prior_masks"
             prior_dir.mkdir(parents=True, exist_ok=True)
-            save_prior_masks(prior, prior_dir, background.stem)
+            prior["outputs"] = save_prior_masks(prior, prior_dir, background.stem)
         if config.no_prior:
             print("[prior] skipped (--no-prior)")
         else:
@@ -516,14 +536,20 @@ def _render_with_cached_prior(
         center=center,
         avoidance_mask=prior.get("avoidance_mask"),
     )
-    rendered, _ = render_image(image, points, config)
-    return rendered, {
+    rendered, laser_mask = render_image(image, points, config)
+    return rendered, laser_mask, {
         "generated_spots": len(points),
         "prior": prior.get("status", {}),
+        "center": prior.get("center"), "fovea": prior.get("fovea"),
+        "optic_disc": prior.get("optic_disc"),
+        "prior_masks": prior.get("outputs", {}),
+        "prior_parameters": prior.get("parameters", {}),
     }
 
 
 def run(args: argparse.Namespace) -> Path:
+    if args.treatment == "grid" and args.no_prior:
+        raise ValueError("GRID requires anatomical priors; do not use --no-prior")
     if args.seed is not None:
         args.bg_seed = int(args.seed)
         args.render_seed = int(args.seed) + 1
@@ -536,6 +562,10 @@ def run(args: argparse.Namespace) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     final_dir = output_dir / f"distill_{int(args.output_size)}"
     final_dir.mkdir(parents=True, exist_ok=True)
+    mask_dir = output_dir / f"laser_masks_{int(args.output_size)}"
+    metadata_dir = output_dir / "metadata"
+    mask_dir.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     backgrounds = _prepare_backgrounds(args, output_dir)
     calibrated = _calibrate_backgrounds(args, backgrounds, output_dir)
 
@@ -544,24 +574,36 @@ def run(args: argparse.Namespace) -> Path:
     if args.resume and manifest_path.exists():
         for line in manifest_path.read_text(encoding="utf-8").splitlines():
             try:
-                existing.add(int(json.loads(line)["index"]))
+                record = json.loads(line)
+                index = int(record["index"])
             except (ValueError, KeyError, json.JSONDecodeError):
                 continue
+            if record.get("treatment", "prp") != args.treatment:
+                raise ValueError("Cannot resume a different treatment in the same output directory")
+            existing.add(index)
 
     manifest_mode = "a" if args.resume else "w"
-    prior_cache: dict[str, tuple[Image.Image, np.ndarray, dict]] = {}
+    prior_cache: dict[tuple[str, str], tuple[Image.Image, np.ndarray, dict]] = {}
     with manifest_path.open(manifest_mode, encoding="utf-8") as manifest:
         for index in range(args.count):
             final_path = final_dir / f"synth_{index:06d}.png"
-            if args.resume and index in existing and final_path.exists():
+            mask_path = mask_dir / f"synth_{index:06d}_mask.png"
+            metadata_path = metadata_dir / f"synth_{index:06d}.json"
+            if (args.resume and index in existing and final_path.exists()
+                    and mask_path.exists() and metadata_path.exists()):
                 continue
             case_name, config = _render_config(args, index)
             background = calibrated[index % len(calibrated)]
-            rendered, render_meta = _render_with_cached_prior(
+            rendered, laser_mask, render_meta = _render_with_cached_prior(
                 background, config, args, prior_cache, output_dir
             )
-            final = apply_fov_hard_mask(rendered, args.output_size)
+            final, final_mask = export_fov_pair(rendered, args.output_size, laser_mask)
             final.save(final_path)
+            final_mask.save(mask_path)
+            render_meta.update({"treatment": config.treatment, "mask": str(mask_path),
+                                "metadata": str(metadata_path), "output": str(final_path),
+                                "background": str(background), "seed": config.seed})
+            metadata_path.write_text(json.dumps(render_meta, indent=2), encoding="utf-8")
             _write_manifest_line(
                 manifest, index, background, final_path, case_name, config,
                 render_meta, args.output_size
@@ -570,6 +612,7 @@ def run(args: argparse.Namespace) -> Path:
                 print(f"[stage1] {index + 1}/{args.count} -> {final_path.name}")
 
     meta = {
+        "treatment": args.treatment,
         "count_requested": int(args.count),
         "background_count": len(backgrounds),
         "backgrounds": [str(path) for path in backgrounds],

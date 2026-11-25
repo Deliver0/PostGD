@@ -13,14 +13,16 @@ experiment contract.
       Hugging Face cache (or downloaded with the explicit `--allow-download`
       flag).
 - [ ] For the formal prior path, download the [LWNet DRIVE binary checkpoint](https://cdn.jsdelivr.net/gh/agaldran/lwnet@ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth)
-      to `engine/experiments/wnet_drive/model_checkpoint.pth`. The exact
+      to `models/wnet_drive/model_checkpoint.pth` and pass `--vessel-model models/wnet_drive`. The exact
       formal server run used this `wnet` checkpoint at 512px. Its pinned source
       is the [LWNet GitHub file](https://github.com/agaldran/lwnet/blob/ce72ddabcf5fc9af14197ac0d43bd29000b17df2/experiments/wnet_drive/model_checkpoint.pth).
       The historical GUI's `big_wnet` DRIVE/HRF pair is a separate path.
-- [ ] Install the upstream `fundus_image_toolbox`; its fovea/optic-disc
-      loader downloads [Zenodo weights](https://zenodo.org/records/11174642)
-      when the configured checkpoint directory is absent, or explicitly use
-      `--no-prior`.
+- [ ] Install `fundus_image_toolbox` and download the fovea/optic-disc
+      [Zenodo weights](https://zenodo.org/records/11174642) before generation.
+      Pass the existing checkpoint directory with `--fovea-model-dir`. The
+      public wrapper requires that directory to exist. Missing or failed
+      anatomical priors stop generation; `--no-prior` explicitly selects a
+      geometry-only run.
 - [ ] Fit the Lab profile using training reference images only.
 - [ ] Store the generated data outside the repository.
 

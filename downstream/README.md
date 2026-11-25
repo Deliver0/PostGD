@@ -1,8 +1,9 @@
 # Few-shot downstream heads
 
 Stage 3 turns the adapted backbone into a task model from a handful of labelled
-images. Three heads are released; all are dataset-agnostic, all freeze the backbone,
-and all select their hyper-parameters on **support labels only**.
+images. Three heads are released; all are dataset-agnostic and select their
+hyper-parameters on **support labels only**. Classification and localization use
+frozen representations; OD/OC segmentation also adapts the final one/two blocks.
 
 | Head | Entry point | Output |
 |------|-------------|--------|
@@ -14,6 +15,38 @@ and all select their hyper-parameters on **support labels only**.
 
 `adapt_head.py` consumes frozen feature arrays and a support/query split:
 
+First extract features from the student checkpoint:
+
+```bash
+python downstream/extract_features.py \
+  --manifest /path/to/classification.json \
+  --student-weights /path/to/student_final.pth \
+  --output ./runs/classification/features.npz
+```
+
+The JSON manifest uses image IDs and binary labels:
+
+```json
+{
+  "samples": [
+    {"image_id": "a", "image": "images/a.png", "label": 0},
+    {"image_id": "b", "image": "images/b.png", "label": 1},
+    {"image_id": "c", "image": "images/c.png", "label": 0},
+    {"image_id": "d", "image": "images/d.png", "label": 1},
+    {"image_id": "e", "image": "images/e.png", "label": 0},
+    {"image_id": "f", "image": "images/f.png", "label": 1}
+  ],
+  "support": ["a", "b", "c", "d"],
+  "query": ["e", "f"]
+}
+```
+
+Image paths are relative to the manifest directory or absolute. For the paper's
+ten-shot classification setting, provide five support images per class; the
+example above only illustrates the format. Support and query IDs must be
+disjoint. Extraction leaves the student frozen. A `.provenance.json` sidecar
+records the student hash and preprocessing settings. Then fit the head:
+
 ```bash
 python downstream/adapt_head.py \
   --support-npz /path/to/support_and_query.npz \
@@ -23,10 +56,25 @@ python downstream/adapt_head.py \
 The NPZ keys are `support_features`, `support_labels`, `query_features`, and
 `query_labels`. Query labels are withheld until the final metric calculation.
 
+The result references a `.head.json` with fitted prototype or logistic-regression
+parameters. To reuse it on features from the same student and preprocessing:
+
+```python
+import json
+from adapt_head import predict_head
+
+head = json.load(open("downstream_result.head.json", encoding="utf-8"))
+probabilities = predict_head(head, query_features)
+predictions = probabilities >= head["threshold"]
+```
+
 ## Segmentation
 
-`segmentation/` reads images and masks directly through a JSON manifest, caches
-pyramid features from the frozen backbone, and fits a small convolutional decoder:
+`segmentation/` reads images and masks through a JSON manifest and fits a small
+convolutional decoder. The `optic_disc` / `OD` tasks adapt the last transformer
+block; `optic_cup` / `OC` adapt the last two. Decoder and backbone learning rates
+default to `3e-4` and `1e-5`. Other tasks use cached frozen features. Pass
+`--finetune-blocks 0` to use the frozen path explicitly.
 
 ```bash
 python downstream/segmentation/few_shot_segmentation.py \

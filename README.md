@@ -39,6 +39,9 @@ images.
 - [Contributing](#contributing)
 - [License](#license)
 
+Implementation coverage and training options are listed in
+[`docs/PAPER_ALIGNMENT.md`](docs/PAPER_ALIGNMENT.md).
+
 ## Pipeline
 
 ```mermaid
@@ -104,13 +107,14 @@ select the matching wheel from the official PyTorch index for your machine.
 | Stage 2 — distillation | `distillation/requirements.txt` |
 | Stage 3 — classification head | `distillation/requirements.txt` |
 | Stage 3 — segmentation head | `downstream/segmentation/requirements.txt` |
+| Stage 3 — localization head | `downstream/localization/requirements.txt` |
 
 ## Pretrained models
 
-No checkpoint is committed to this repository. The download links, directory layout,
-checksums and licence notes for every component — the retina background model, the
-vessel and fovea/optic-disc priors, the DINOv3 initialisation, and the PostGD student —
-are collected in [`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md).
+No checkpoint is committed to this repository. External component download links,
+directory layouts and licence notes are collected in
+[`docs/MODEL_WEIGHTS.md`](docs/MODEL_WEIGHTS.md). The PostGD student checkpoint is
+not publicly hosted yet; the document describes its expected format and local use.
 
 The scripts expect them under a local, ignored `models/` directory:
 
@@ -137,6 +141,8 @@ manifest:
 ```bash
 python stage1/full_method/generate.py \
   --count 200000 \
+  --vessel-model ./models/wnet_drive \
+  --fovea-model-dir /path/to/downloaded/fovea_od/checkpoint-directory \
   --output-size 224 \
   --device cuda \
   --output-dir /path/to/runs/stage1_200k
@@ -145,6 +151,11 @@ python stage1/full_method/generate.py \
 Two approved spot profiles ship with the generator — `bright_no_dark` (the default solid
 appearance) and `dark_center`. Switch between them with `--spot-case`, and pass
 `--no-prior` for a geometry-only smoke test that skips the anatomy models.
+
+The default treatment is `--treatment prp`. Use `--treatment grid` for macular
+grid synthesis inside the fovea-centred posterior region, excluding vessels and
+the optic disc. GRID requires the anatomical priors and cannot be combined with
+`--no-prior`. The same treatment flag is available in the standalone renderer.
 
 The requested spot count is an **upper bound, not a target**: field-of-view limits,
 anatomical avoidance and inter-spot spacing all take priority, and the number of spots
@@ -158,8 +169,8 @@ python distillation/distill.py \
   --output-dir /path/to/runs/distill_200k \
   --teacher-model vit_large_patch16_dinov3 \
   --student-model vit_base_patch16_dinov3 \
-  --teacher-weights /path/to/weights/dinov3 \
-  --student-weights /path/to/weights/dinov3 \
+  --teacher-weights ./models/dinov3/vit_large_patch16_dinov3.pth \
+  --student-weights ./models/dinov3/vit_base_patch16_dinov3.pth \
   --epochs 200 \
   --expected-images 200000 \
   --device cuda
@@ -174,13 +185,17 @@ full objective and hyperparameters are in
 
 ### Stage 3 — few-shot downstream adaptation
 
-The adapters are dataset-agnostic: they consume frozen backbone features and a
-support/query split, select a head using **support labels only**, and report on the
-held-out query set.
+The adapters are dataset-agnostic. They use a support/query split, select settings
+using **support labels only**, and report on the held-out query set.
 
 Classification head:
 
 ```bash
+python downstream/extract_features.py \
+  --manifest /path/to/classification.json \
+  --student-weights /path/to/student_final.pth \
+  --output /path/to/support_and_query.npz
+
 python downstream/adapt_head.py \
   --support-npz /path/to/support_and_query.npz \
   --output /path/to/runs/downstream_result.json
@@ -188,8 +203,9 @@ python downstream/adapt_head.py \
 
 See [`downstream/README.md`](downstream/README.md) for the NPZ format.
 
-Segmentation head — it reads images and masks from a JSON manifest, caches the frozen
-pyramid features once, and fits a small decoder:
+Segmentation reads images and masks from a JSON manifest. Optic disc and optic cup
+tasks adapt the final one and two backbone blocks, respectively, at `1e-5` while
+training the decoder at `3e-4`. Other segmentation tasks use frozen pyramid features:
 
 ```bash
 python downstream/segmentation/few_shot_segmentation.py \

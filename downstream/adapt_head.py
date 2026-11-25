@@ -56,11 +56,18 @@ def fit_scores(
     train_labels: np.ndarray,
     query_features: np.ndarray,
 ) -> np.ndarray:
+    return predict_head(fit_head(candidate, train_features, train_labels), query_features)
+
+
+def fit_head(candidate: str, train_features: np.ndarray, train_labels: np.ndarray) -> dict:
+    """Fit a head and return JSON-serializable parameters for later inference."""
     if candidate == "cosine_raw":
-        return cosine_scores(query_features, prototypes(train_features, train_labels))
+        return {"candidate": candidate, "kind": "cosine",
+                "prototypes": prototypes(train_features, train_labels).tolist()}
     if candidate.startswith("cosine_shrink_"):
         alpha = float(candidate.rsplit("_", 1)[1])
-        return cosine_scores(query_features, prototypes(train_features, train_labels, alpha))
+        return {"candidate": candidate, "kind": "cosine",
+                "prototypes": prototypes(train_features, train_labels, alpha).tolist()}
     if candidate.startswith("logreg_"):
         c_value = float(candidate.rsplit("_", 1)[1])
         classifier = LogisticRegression(
@@ -70,8 +77,19 @@ def fit_scores(
             random_state=0,
         )
         classifier.fit(normalize(train_features), train_labels)
-        return classifier.predict_proba(normalize(query_features))[:, 1]
+        return {"candidate": candidate, "kind": "logistic", "coef": classifier.coef_.tolist(),
+                "intercept": classifier.intercept_.tolist()}
     raise ValueError(f"unknown candidate: {candidate}")
+
+
+def predict_head(head: dict, features: np.ndarray) -> np.ndarray:
+    if head["kind"] == "cosine":
+        return cosine_scores(features, np.asarray(head["prototypes"], dtype=features.dtype))
+    if head["kind"] == "logistic":
+        logits = (normalize(features) @ np.asarray(head["coef"]).T).ravel()
+        logits += float(head["intercept"][0])
+        return np.exp(-np.logaddexp(0, -logits))
+    raise ValueError(f"unknown head kind: {head['kind']}")
 
 
 def score(labels: np.ndarray, probabilities: np.ndarray) -> dict[str, float]:
@@ -126,12 +144,12 @@ def select_candidate(
     return selected, summaries
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--support-npz", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cv-repeats", type=int, default=5)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     arrays = np.load(args.support_npz)
     support_features = np.asarray(arrays["support_features"], dtype=np.float32)
@@ -151,20 +169,24 @@ def main() -> None:
         DEFAULT_CANDIDATES,
         args.cv_repeats,
     )
-    probabilities = fit_scores(
-        selected,
-        support_features,
-        support_labels,
-        query_features,
-    )
+    head = fit_head(selected, support_features, support_labels)
+    probabilities = predict_head(head, query_features)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    head_path = args.output.with_suffix(".head.json")
+    head.update({"format_version": 1, "normalization": "l2", "threshold": 0.5})
+    head_path.write_text(json.dumps(head, indent=2), encoding="utf-8")
     result = {
         "selected_candidate": selected,
+        "head_checkpoint": str(head_path),
         "support_count": int(len(support_labels)),
         "query_count": int(len(query_labels)),
         "threshold": 0.5,
         "cv": cv,
         "query_metrics": score(query_labels, probabilities),
     }
+    provenance = args.support_npz.with_suffix(".provenance.json")
+    if provenance.is_file():
+        result["feature_provenance"] = json.loads(provenance.read_text(encoding="utf-8"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(result, indent=2, ensure_ascii=False) + "\n",

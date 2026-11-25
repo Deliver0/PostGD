@@ -33,6 +33,7 @@ class PriorConfig:
     vessel_buffer_px: int = 8
     posterior_pole_radius: float = 160.0
     save_masks: bool = True
+    treatment: str = "prp"
 
 
 def _resolve_device(device: str) -> str:
@@ -119,6 +120,10 @@ def _load_fovea_od(image: Image.Image, cfg: PriorConfig, device: str):
 
 
 def build_prior(image: Image.Image, cfg: PriorConfig, *, spot_radius: float) -> dict:
+    if cfg.treatment not in {"prp", "grid"}:
+        raise ValueError("treatment must be prp or grid")
+    if cfg.treatment == "grid" and not cfg.enabled:
+        raise ValueError("GRID requires anatomical priors; do not use --no-prior")
     h, w = image.height, image.width
     fov_center = (w / 2.0, h / 2.0)
     if not cfg.enabled:
@@ -131,9 +136,13 @@ def build_prior(image: Image.Image, cfg: PriorConfig, *, spot_radius: float) -> 
     vessel, vessel_status = _load_vessels(image, cfg, device)
     fovea_od, fovea_status = _load_fovea_od(image, cfg, device)
     if fovea_od is None:
-        fx, fy, ox, oy = (*fov_center, *fov_center)
-    else:
-        fx, fy, ox, oy = fovea_od
+        raise RuntimeError(
+            "anatomical priors are enabled but fovea/OD localization is unavailable: "
+            f"{fovea_status}. Point --fovea-model-dir / POSTGD_FOVEA_MODEL_DIR "
+            "at a local checkpoint directory, or pass --no-prior for a "
+            "geometry-only run."
+        )
+    fx, fy, ox, oy = fovea_od
 
     od_distance = math.hypot(ox - fx, oy - fy)
     disc_radius = max(16.0, 0.22 * od_distance * max(0.8, float(cfg.disc_margin)))
@@ -160,9 +169,10 @@ def build_prior(image: Image.Image, cfg: PriorConfig, *, spot_radius: float) -> 
             "wnet_drive directory containing model_checkpoint.pth, or pass "
             "--no-prior to render without anatomical avoidance."
         )
-    block = vessel_block | optic_disc | posterior
+    # PRP excludes the posterior pole; GRID stays inside it.
+    block = vessel_block | optic_disc | (posterior if cfg.treatment == "prp" else ~posterior)
     return {
-        "enabled": True, "center": (ox, oy) if fovea_od is not None else fov_center,
+        "enabled": True, "center": (ox, oy) if cfg.treatment == "prp" else (fx, fy),
         "avoidance_mask": block, "vessel_mask": vessel_block if vessel is not None else None,
         "optic_disc_mask": optic_disc, "posterior_pole_mask": posterior,
         "fovea": (fx, fy), "optic_disc": (ox, oy),
