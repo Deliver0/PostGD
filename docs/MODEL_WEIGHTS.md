@@ -214,99 +214,51 @@ configuration and resumable checkpoint, to the output directory.
 
 ## 6. PostGD distilled student
 
-The following is a previously recorded local candidate, not a publicly hosted
-release or a verified checkpoint for the paper-aligned code changes:
+The pretrained student is available at
+[Deliver0/postgd-dinov3-student](https://huggingface.co/Deliver0/postgd-dinov3-student).
+It contains the backbone only; train task-specific heads using the downstream
+guides. The model card describes its associated training configuration,
+provenance and limitations.
+
+Download the original PyTorch state dict for the PostGD scripts:
+
+```bash
+hf download Deliver0/postgd-dinov3-student student_final.pth \
+  --revision ed5f107e49b6624eb9cdf206df257deffd3fe956 \
+  --local-dir "$POSTGD_WEIGHTS/student"
+```
+
+Release details:
 
 ```text
 student_final.pth
 size:   342,626,578 bytes (326.75 MiB)
-sha256: 1e5843650fd94b5ab12ce298fb3a30ec550982efa6ad62dbed04697f0aca7e00
+sha256: 3de942cfab4657d05c201207b4760ce07cd1537a49bccbb7565d930ed04d8544
 format: raw PyTorch state_dict() for vit_base_patch16_dinov3
+revision: ed5f107e49b6624eb9cdf206df257deffd3fe956
 ```
 
-The recorded training configuration is `200,000` generated images, `200` epochs,
-batch size `64`, learning rate `2e-4`, weight decay `0.05`, `500` warmup steps,
-`beta=0.1`, seed `42`, and `pretrained=true` for the DINOv3 initialization.
+The model repository also includes an equivalent `model.safetensors`, inference
+`config.json`, sanitized `training_config.json`, `SHA256SUMS` and the DINOv3
+license. These derived weights use the DINOv3 license, not the MIT license for
+the original PostGD code. The associated configuration records `beta=0.01`;
+the manuscript recipe specifies `beta=0.1`. This artifact is not presented as a
+verified reproduction of every manuscript setting.
 
-The matching local/server candidate is not hosted yet. Keep it at
-`models/student/student_final.pth` when testing a clone. It is not a checkpoint
-wrapper with a `student` or `state_dict` key; the loader receives the state dict
-directly.
-
-Minimal load check:
+For image embeddings, load the Safetensors version directly with `timm>=1.0.31`:
 
 ```python
-from pathlib import Path
-
 import timm
-import torch
 
-path = Path("models/student/student_final.pth")
-model = timm.create_model("vit_base_patch16_dinov3", pretrained=False, num_classes=0)
-state = torch.load(path, map_location="cpu")
-model.load_state_dict(state, strict=True)
+model = timm.create_model("hf-hub:Deliver0/postgd-dinov3-student", pretrained=True)
 model.eval()
-print("loaded", path, "with", len(state), "tensors")
+data_config = timm.data.resolve_model_data_config(model)
+transform = timm.data.create_transform(**data_config, is_training=False)
 ```
 
-Do not publish the smoke, old DINOv2, old 50-epoch, or spatial-distillation
-files under this name. They are different experiments.
-
-## 7. Release checklist
-
-The file is small enough for ordinary Google Drive sharing: 326.75 MiB before
-any archive wrapper. Hugging Face is preferable for a public reproducibility
-release because it provides versioning, a model card, and a stable download API.
-Neither platform changes the license obligations.
-
-Before adding a public URL to this README:
-
-1. Confirm that redistribution of a DINOv3-derived student checkpoint is allowed
-   by the DINOv3 license and any applicable upstream terms.
-2. Upload only the formal `student_final.pth`, a sanitized copy of its
-   `config.json`, and a checksum file. Remove server absolute paths and do not
-   upload private images or experiment logs.
-3. Verify the published file with the SHA-256 above, then add the permanent URL
-   and the exact revision to this document and the root README.
-
-## 8. Hugging Face release procedure
-
-Create a new **Model** repository on Hugging Face, for example
-`Deliver0/postgd-dinov3-student`. Upload only PostGD-owned release artifacts:
-
-```text
-student_final.pth       formal PostGD distilled student
-config.json             sanitized training configuration
-SHA256SUMS              checksum for student_final.pth
-README.md               model card and upstream attribution
-```
-
-Do not upload the DINOv3 teacher initialization, Stable Diffusion base or
-fine-tuned UNet, LWNet W-Net, Fundus Image Toolbox fovea/optic-disc checkpoint,
-clinical images, or `last_checkpoint.pt`. Those are third-party or private
-artifacts. The current code uses fovea (macula) and optic-disc localization;
-there is no separate PostGD optic-cup model in this release.
-
-After creating the repository in the Hugging Face web interface, upload the
-prepared folder with the official CLI:
-
-```bash
-python -m pip install -U huggingface_hub
-hf auth login
-hf upload Deliver0/postgd-dinov3-student \
-  ./postgd-student-release . \
-  --repo-type model
-```
-
-The 326.75 MiB file is handled by Hugging Face storage without adding it to the
-GitHub repository. Keep the repository private until the DINOv3 license review
-is complete, then switch it to public and add the resulting URL to this guide.
-The model card should state that `student_final.pth` is a raw
-`vit_base_patch16_dinov3` state dict, include the training configuration and
-SHA-256, link to the DINOv3 license, and say that the artifact is research-only
-and not a medical device.
-
-For a local verification:
+Use RGB images with the returned transform; the default input is 224 × 224 and
+the output is a 768-dimensional embedding. See the model card for a complete
+inference example. For a local checksum check:
 
 ```bash
 sha256sum models/student/student_final.pth

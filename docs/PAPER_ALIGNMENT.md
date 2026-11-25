@@ -28,10 +28,10 @@ geometry-only mode.
 | Treatment mode | PRP outside the posterior region; GRID inside it | Select `--treatment prp` (default) or `--treatment grid`. GRID uses the foveal centre and requires anatomical priors. Appearance presets are independent of treatment mode. |
 | Training environment | The reported experiments used eight GPUs and a global batch size of 640 | The released single-process framework defaults to batch size 64. Users configure batch size and device for their hardware; a fixed eight-GPU launcher is outside the release scope. |
 | OD/OC segmentation adaptation | Last one/two blocks at `1e-5`; decoder at `3e-4` | Enabled by task name; use `--finetune-blocks` to override. All folds and final training start from the same student weights. |
-| Student download | Usable distilled student | No publicly hosted student checkpoint. The local candidate described in MODEL_WEIGHTS is not a verified checkpoint for these changes. |
+| Student download | Pretrained ViT-B/16 backbone | Available on [Hugging Face](https://huggingface.co/Deliver0/postgd-dinov3-student) as PyTorch and Safetensors weights. The model card documents the artifact's provenance and associated configuration. |
 | Classification extraction | Frozen shared student encoder followed by a classification head | Run `downstream/extract_features.py` to export support/query features, then `adapt_head.py`. The fitted head and feature provenance are saved. |
 | EMA checkpoint | An EMA student is maintained by the runner | Both raw and EMA state dicts are written. The checkpoint used for the reported results still requires confirmation. |
-| Model compatibility | Released DINOv3 weights and four intermediate feature maps | Real-weight loading, forward/backward execution and CUDA memory requirements need validation in a configured training environment. |
+| Model compatibility | Released DINOv3 weights and four intermediate feature maps | The published student passes strict CPU loading and an embedding forward check. Four-map extraction and partial-finetuning gradients were checked with a randomly initialized DINOv3 backbone. CUDA memory requirements and full downstream performance require validation in a configured training environment. |
 
 The release does not include clinical images, patient annotations or published
 per-image predictions. Support-only code paths do not verify the composition of

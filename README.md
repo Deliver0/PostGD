@@ -80,10 +80,20 @@ python downstream/segmentation/few_shot_segmentation.py \
 
 ## Models and data
 
+Download the pretrained **PostGD student** from
+[Hugging Face](https://huggingface.co/Deliver0/postgd-dinov3-student):
+
+```bash
+hf download Deliver0/postgd-dinov3-student student_final.pth --local-dir models/student
+```
+
+Use `models/student/student_final.pth` with `--student-weights` in the downstream
+scripts. The model page also provides direct `timm` loading, the model card and
+weight license. Task-specific heads require separate training.
+
 [Model setup and download links](docs/MODEL_WEIGHTS.md) cover the background
-generator, anatomical priors and DINOv3 initialization. The distilled PostGD student
-is not publicly hosted yet; it can be trained with the supplied distillation code.
-Clinical datasets and model checkpoints are not included in the repository.
+generator, anatomical priors and DINOv3 initialization. Clinical datasets and
+weight files are not bundled in this Git repository.
 
 For further details, see the [implementation notes](docs/IMPLEMENTATION.md) and
 [reproducibility checklist](docs/REPRODUCIBILITY.md).
